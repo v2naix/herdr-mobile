@@ -10,7 +10,7 @@ if [ -z "${HERDR_MOBILE_DOMAIN:-}" ]; then
     echo "Missing domain configuration; copy .herdr-mobile-domain.example to .herdr-mobile-domain." >&2
     exit 2
   fi
-  IFS= read -r HERDR_MOBILE_DOMAIN < "$DOMAIN_FILE"
+  HERDR_MOBILE_DOMAIN=$(cat "$DOMAIN_FILE")
 fi
 case "$HERDR_MOBILE_DOMAIN" in
   ''|*[!A-Za-z0-9.-]*) echo "Invalid HERDR_MOBILE_DOMAIN." >&2; exit 2 ;;
