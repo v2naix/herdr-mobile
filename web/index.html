@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#10131a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>herdr mobile</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="/static/app.css?v=6">
+</head>
+<body>
+  <header><button id="back" class="icon hidden" aria-label="返回">‹</button><h1>herdr</h1><span id="connection" class="offline">离线</span><button id="logout" class="header-action hidden" type="button">注销</button></header>
+  <main>
+    <section id="login" class="card">
+      <h2>连接 Mac</h2><p>输入服务端本地 token。token 仅用于换取安全会话，不会写入 URL 或浏览器存储。</p>
+      <form id="login-form"><input id="token" type="password" autocomplete="current-password" placeholder="Bearer token" required maxlength="256"><button>登录</button></form>
+      <p id="login-error" class="error" role="alert"></p>
+    </section>
+    <section id="list" class="hidden" aria-label="Agent 列表"></section>
+    <section id="detail" class="hidden">
+      <div class="pane-title"><div><h2 id="detail-agent"></h2><p id="detail-meta"></p></div></div>
+      <pre id="output" tabindex="0" aria-label="Pane 输出"></pre>
+      <div class="actions"><button data-action="approve_once">Approve once</button><button class="danger" data-action="deny">Deny</button></div>
+      <form id="send-form"><textarea id="text" rows="2" maxlength="4096" placeholder="发送文字（最多 20 行）"></textarea><button type="submit">发送</button><button type="button" id="enter">Enter</button></form>
+      <div id="terminal-controls" class="term-keys" aria-label="终端按键">
+        <button data-key="Tab" aria-label="Tab">⇥</button>
+        <button data-key="Escape">Esc</button>
+        <button class="key-red" data-key="Ctrl+c">^C</button>
+        <button data-text="y">y</button>
+        <button data-text="n">n</button>
+        <div class="popup-toggle">
+          <button id="ctrl-menu-toggle" class="key-blue" type="button" aria-expanded="false" aria-controls="ctrl-popup">⌃</button>
+          <div id="ctrl-popup" class="key-popup ctrl-popup hidden" role="menu">
+            <button data-key="Ctrl+c" role="menuitem">^C</button>
+            <button data-key="Ctrl+l" role="menuitem">^L</button>
+            <button data-key="Ctrl+p" role="menuitem">^P</button>
+            <button data-key="Ctrl+o" role="menuitem">^O</button>
+          </div>
+        </div>
+        <span class="key-spacer"></span>
+        <div class="popup-toggle">
+          <button id="arrow-toggle" type="button" aria-expanded="false" aria-controls="arrow-popup">↕</button>
+          <div id="arrow-popup" class="key-popup arrow-popup hidden" aria-label="方向键">
+            <span></span><button data-key="Up" aria-label="上">↑</button><span></span>
+            <button data-key="Left" aria-label="左">←</button><button data-key="Enter" aria-label="回车">↵</button><button data-key="Right" aria-label="右">→</button>
+            <span></span><button data-key="Down" aria-label="下">↓</button><span></span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <p id="toast" role="status"></p>
+  </main>
+  <script src="/static/reconnect-policy.js?v=7" defer></script>
+  <script src="/static/app.js?v=7" defer></script>
+</body>
+</html>

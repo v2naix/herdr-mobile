@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.herdr-mobile.backend</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HERDR_MOBILE_ROOT__/scripts/start-https-backend.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__HERDR_MOBILE_ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>__HERDR_MOBILE_ROOT__/.runtime/logs/backend.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HERDR_MOBILE_ROOT__/.runtime/logs/backend.log</string>
+</dict>
+</plist>

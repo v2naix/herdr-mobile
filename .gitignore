@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.herdr-mobile-token
+.herdr-mobile-domain
+.cloudflare-api-token
+.caddy/
+.tools/
+.runtime/
+.DS_Store
