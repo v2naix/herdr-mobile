@@ -36,6 +36,27 @@ class AuthTests(unittest.TestCase):
         self.assertTrue(store.valid(retained))
         self.assertFalse(store.revoke("made-up"))
 
+    def test_exchange_purges_expired_sessions(self):
+        now = [100.0]
+        store = SessionStore("correct-token", ttl_seconds=10, clock=lambda: now[0])
+        expired = store.exchange("correct-token")
+
+        now[0] = 111.0
+        fresh = store.exchange("correct-token")
+
+        self.assertFalse(store.revoke(expired))
+        self.assertTrue(store.valid(fresh))
+
+    def test_session_limit_revokes_the_oldest_session(self):
+        store = SessionStore("correct-token", max_sessions=2)
+        oldest = store.exchange("correct-token")
+        retained = store.exchange("correct-token")
+        newest = store.exchange("correct-token")
+
+        self.assertFalse(store.valid(oldest))
+        self.assertTrue(store.valid(retained))
+        self.assertTrue(store.valid(newest))
+
     def test_insecure_existing_token_permissions_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "token"

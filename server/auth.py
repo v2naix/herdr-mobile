@@ -31,18 +31,28 @@ class SessionStore:
         bearer_token: str,
         ttl_seconds: int = 12 * 60 * 60,
         clock: Callable[[], float] = time.monotonic,
+        max_sessions: int = 100,
     ):
+        if max_sessions < 1:
+            raise ValueError("max_sessions must be positive")
         self._token_hash = hashlib.sha256(bearer_token.encode()).digest()
         self._sessions: dict[str, float] = {}
         self._ttl = ttl_seconds
         self._clock = clock
+        self._max_sessions = max_sessions
 
     def exchange(self, bearer_token: str) -> str | None:
         candidate = hashlib.sha256(bearer_token.encode()).digest()
         if not hmac.compare_digest(candidate, self._token_hash):
             return None
+        now = self._clock()
+        expired = [session for session, expires in self._sessions.items() if expires <= now]
+        for session in expired:
+            self._sessions.pop(session)
+        while len(self._sessions) >= self._max_sessions:
+            self._sessions.pop(next(iter(self._sessions)))
         session = secrets.token_urlsafe(32)
-        self._sessions[session] = self._clock() + self._ttl
+        self._sessions[session] = now + self._ttl
         return session
 
     def revoke(self, session: str | None) -> bool:
