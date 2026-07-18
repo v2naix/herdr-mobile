@@ -126,6 +126,8 @@ struct PaneSupervisionView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("当前 pane：\(pane.status)，\(pane.title)\(pane.cwd.isEmpty ? "" : "，\(pane.cwd)")")
+        .accessibilityIdentifier("current-pane-title")
     }
 
     private var statusSymbol: String {
@@ -170,20 +172,29 @@ struct PaneSupervisionView: View {
             .padding(.horizontal)
 
             HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        Button("Reply") { model.presentReplyEditor() }
-                            .buttonStyle(.borderedProminent)
-                        commandButton("Enter", command: .enter)
-                        commandButton("Esc", command: .escape)
-                        commandButton("y", command: .yes)
-                        commandButton("n", command: .no)
-                        commandButton("Allow once", command: .allowOnce)
-                        commandButton("Deny", command: .deny, role: .destructive)
-                    }
-                    .padding(.horizontal)
-                }
+                Button("回复") { model.presentReplyEditor() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSendCommand)
+                    .accessibilityIdentifier("reply")
+                commandButton("批准", command: .allowOnce)
+                    .tint(.green)
+                    .accessibilityIdentifier("approve")
+                commandButton("拒绝", command: .deny, role: .destructive)
+                    .tint(.red)
+                    .accessibilityIdentifier("deny")
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
 
+            HStack(spacing: 8) {
+                commandButton("Enter", command: .enter)
+                    .tint(.green)
+                commandButton("Esc", command: .escape)
+                    .tint(.red)
+                commandButton("y", command: .yes)
+                    .tint(.green)
+                commandButton("n", command: .no)
+                    .tint(.red)
                 Menu {
                     commandButton("Tab", command: .tab)
                     commandButton("↑", command: .up)
@@ -196,12 +207,13 @@ struct PaneSupervisionView: View {
                     commandButton("Ctrl+P", command: .controlP)
                     commandButton("Ctrl+O", command: .controlO)
                 } label: {
-                    Label("更多按键", systemImage: "ellipsis.circle")
-                        .labelStyle(.iconOnly)
+                    Label("更多", systemImage: "ellipsis.circle")
                 }
                 .disabled(!canSendCommand)
-                .padding(.trailing)
+                .accessibilityIdentifier("more-commands")
             }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
         }
         .padding(.vertical, 10)
         .background(.bar)

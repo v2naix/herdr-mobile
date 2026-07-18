@@ -247,7 +247,11 @@ private struct PaneStatusBox: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
+        .tint(tint)
         .disabled(panes.isEmpty)
+        .accessibilityLabel("\(statusName)，\(panes.count) 个 pane")
+        .accessibilityHint("轻点选择最新 pane，长按打开 pane 选择菜单")
+        .accessibilityIdentifier("pane-status-\(status.rawValue)")
         .contextMenu {
             ForEach(panes) { pane in
                 Button(pane.title) {
@@ -264,6 +268,26 @@ private struct PaneStatusBox: View {
         case .working: "clock"
         case .idle: "pause.circle"
         case .unknown: "questionmark.circle"
+        }
+    }
+
+    private var statusName: String {
+        switch status {
+        case .blocked: "Blocked"
+        case .done: "Done"
+        case .working: "Working"
+        case .idle: "Idle"
+        case .unknown: "Unknown"
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .blocked: .red
+        case .done: .green
+        case .working: .yellow
+        case .idle: .mint
+        case .unknown: .gray
         }
     }
 }
