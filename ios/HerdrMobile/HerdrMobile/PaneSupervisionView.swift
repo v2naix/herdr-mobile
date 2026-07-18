@@ -101,9 +101,17 @@ struct PaneSupervisionView: View {
                 Button(action: returnToBottom) {
                     Image(systemName: "arrow.down.to.line")
                         .frame(minWidth: 54, minHeight: 44)
+                        .overlay(alignment: .topTrailing) {
+                            if model.state.hasPendingOutput {
+                                Circle()
+                                    .fill(.blue)
+                                    .frame(width: 9, height: 9)
+                                    .offset(x: -7, y: 7)
+                            }
+                        }
                 }
                 .buttonStyle(.bordered)
-                .tint(.white.opacity(0.45))
+                .tint(model.state.hasPendingOutput ? .blue : .white.opacity(0.45))
                 .padding()
                 .accessibilityLabel(
                     model.state.hasPendingOutput ? "有新输出，返回底部" : "返回底部"
