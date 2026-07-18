@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from fastapi.testclient import TestClient
@@ -138,19 +139,32 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
 
     def test_native_and_browser_sessions_are_not_interchangeable(self):
+        origin = "https://mac.example.ts.net"
         native = self.client.post(
             "/api/native/session",
             headers={"Authorization": "Bearer test-token"},
         ).json()["token"]
+        browser = self.client.post(
+            "/api/session",
+            headers={"Authorization": "Bearer test-token", "origin": origin},
+        ).cookies["herdr_mobile_session"]
 
         with self.client.websocket_connect(
             "/ws",
             cookies={"herdr_mobile_session": native},
-            headers={"origin": "https://mac.example.ts.net"},
+            headers={"origin": origin},
         ) as socket:
-            with self.assertRaises(WebSocketDisconnect) as rejected:
+            with self.assertRaises(WebSocketDisconnect) as rejected_browser:
                 socket.receive_text()
-        self.assertEqual(rejected.exception.code, 1008)
+        self.assertEqual(rejected_browser.exception.code, 1008)
+
+        with self.client.websocket_connect(
+            "/ws",
+            headers={"Authorization": f"Bearer {browser}"},
+        ) as socket:
+            with self.assertRaises(WebSocketDisconnect) as rejected_native:
+                socket.receive_text()
+        self.assertEqual(rejected_native.exception.code, 1008)
 
     def test_logout_requires_allowed_origin_clears_cookie_and_revokes_session(self):
         origin = "https://mac.example.ts.net"
@@ -251,6 +265,131 @@ class AppTests(unittest.TestCase):
         self.assertIn('id="arrow-popup"', html)
         for key in ("Up", "Left", "Enter", "Right", "Down"):
             self.assertIn(f'data-key="{key}"', html)
+
+    def test_native_websocket_uses_bearer_and_announces_protocol_epoch(self):
+        token = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        with self.client.websocket_connect(
+            "/ws",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as socket:
+            hello = socket.receive_json()
+
+        self.assertEqual(hello["type"], "hello")
+        self.assertEqual(hello["protocol_version"], 1)
+        self.assertGreaterEqual(len(hello["server_epoch"]), 16)
+
+    def test_native_websocket_sends_versioned_full_snapshots_for_strict_subscription(self):
+        token = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        with self.client.websocket_connect(
+            "/ws",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as socket:
+            hello = socket.receive_json()
+            socket.send_json({
+                "type": "subscribe",
+                "subscription_id": "subscription-1",
+                "pane_id": "w1:p1",
+                "pane_ref": "term-safe",
+                "lines": 30,
+            })
+            messages = [socket.receive_json(), socket.receive_json()]
+
+        snapshot = next(message for message in messages if message["type"] == "pane_snapshot")
+        output = next(message for message in messages if message["type"] == "output_snapshot")
+        self.assertEqual(snapshot["server_epoch"], hello["server_epoch"])
+        self.assertEqual(snapshot["revision"], 1)
+        self.assertEqual(snapshot["panes"][0]["pane_ref"], "term-safe")
+        self.assertEqual(output, {
+            "type": "output_snapshot",
+            "server_epoch": hello["server_epoch"],
+            "subscription_id": "subscription-1",
+            "pane_id": "w1:p1",
+            "pane_ref": "term-safe",
+            "revision": 1,
+            "text": "<script>alert(1)</script>\nready",
+        })
+
+    def test_pane_revision_remains_monotonic_across_native_connections_in_one_epoch(self):
+        runner = FakeRunner()
+        app = create_app(
+            adapter=HerdrAdapter(runner),
+            sessions=SessionStore("test-token"),
+            allowed_origins={"http://testserver"},
+            secure_cookie=False,
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        def subscribe(socket, subscription_id):
+            socket.send_json({
+                "type": "subscribe", "subscription_id": subscription_id,
+                "pane_id": "w1:p1", "pane_ref": "term-safe", "lines": 30,
+            })
+            messages = [socket.receive_json(), socket.receive_json()]
+            return next(message for message in messages if message["type"] == "pane_snapshot")
+
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {token}"}
+        ) as socket:
+            epoch = socket.receive_json()["server_epoch"]
+            first = subscribe(socket, "subscription-1")
+            changed = json.loads(runner.list_output)
+            changed["result"]["panes"][0]["display_agent"] = "pi - 新标题"
+            runner.list_output = json.dumps(changed)
+            updated = subscribe(socket, "subscription-2")
+
+        second_token = client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {second_token}"}
+        ) as socket:
+            second_hello = socket.receive_json()
+            restored = subscribe(socket, "subscription-3")
+
+        self.assertEqual(first["revision"], 1)
+        self.assertEqual(updated["revision"], 2)
+        self.assertEqual(second_hello["server_epoch"], epoch)
+        self.assertEqual(restored["revision"], 2)
+
+    def test_native_subscription_rejects_browser_shape_and_stale_identity(self):
+        token = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        with self.client.websocket_connect(
+            "/ws",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as socket:
+            socket.receive_json()
+            socket.send_json({
+                "type": "subscribe", "pane_id": "w1:p1",
+                "pane_ref": "term-safe", "lines": 30,
+            })
+            malformed = socket.receive_json()
+            socket.send_json({
+                "type": "subscribe", "subscription_id": "subscription-2",
+                "pane_id": "w1:p1", "pane_ref": "stale", "lines": 30,
+            })
+            stale = socket.receive_json()
+
+        self.assertEqual(malformed["type"], "error")
+        self.assertIn("subscribe", malformed["error"])
+        self.assertEqual(stale["type"], "error")
+        self.assertIn("identity", stale["error"])
 
     def test_authenticated_websocket_pushes_snapshot_and_plain_output(self):
         app = create_app(

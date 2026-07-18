@@ -5,7 +5,8 @@ struct HerdrMobileApp: App {
     @StateObject private var model = AppModel(
         sessions: NativeSessionHTTPClient(),
         credentials: KeychainCredentialStore(),
-        configuration: OriginDefaultsStore()
+        configuration: OriginDefaultsStore(),
+        liveConnection: NetworkWebSocketConnection()
     )
 
     var body: some Scene {

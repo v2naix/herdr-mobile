@@ -20,7 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - 提供针对 MacGuard `ctx.ui.confirm` 实测过的固定 `approve once / deny` 动作；界面不显示 `always allow`，服务端也拒绝该动作。
 - WebSocket 在临时断网后自动重连；认证或 Origin 被拒绝（1008）时停止重连并返回登录页，避免无效请求循环。提供深色 iPhone UI、manifest 和 service worker，可添加到 iPhone 主屏幕；支持注销并立即撤销当前内存会话。
 - 健康检查 `GET /healthz`、严格 Origin/CSP、8 KiB WS 消息上限、连接/速率限制。
-- `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端基础：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并支持冷启动恢复、更换服务器和本地优先退出。实时 pane 浏览将在后续阶段加入。
+- `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并可浏览 agent pane、打开详情和跟随最新的有界输出快照。
 - 结构化事件日志不记录终端输入或输出正文；Uvicorn access log 默认关闭。
 - adapter 可注入 fake runner，测试覆盖 pane 身份校验、输入边界、认证和 XSS 展示边界。
 
@@ -159,13 +159,15 @@ WebSocket 只接受以下严格对象（未知字段会被拒绝）：
 - `send_keys`：`pane_id, pane_ref, keys[]`
 - `action`：`pane_id, pane_ref, action, confirmed?`
 
+浏览器连接继续使用上述对象和 Cookie + 精确 Origin 认证。原生连接改用短期 bearer 握手，服务端先发送包含 `protocol_version + server_epoch` 的 `hello`；原生 `subscribe` 还必须包含 `subscription_id`。`pane_snapshot` 和 `output_snapshot` 都是带 epoch、身份和单调 revision 的完整替换快照。
+
 客户端不能发送 `agent_event`，也没有相应 API。状态只来自服务端轮询。最多 8 个 WS 连接，每连接 10 秒 30 条消息，单消息最多 8 KiB；Uvicorn 总并发上限为 32。命令超时 8 秒。
 
 ## 威胁模型
 
 **防护目标：** 未经授权的 tailnet 设备、被诱导打开的跨站网页、恶意/过期客户端、pane ID 变化、超大输入、shell 注入和终端输出 XSS。
 
-**主要措施：** Tailscale ACL；默认本地 token；短期 HttpOnly 会话；HTTP 会话交换与 WebSocket 均校验精确 Origin；CSP；严格 schema/allowlist；长度、行数、控制字符、速率、连接和输出限制；argv-only 子进程；操作前重新发现 pane 并校验 terminal 身份；纯文本 DOM 渲染；敏感正文不入日志。
+**主要措施：** Tailscale ACL；默认本地 token；浏览器短期 HttpOnly 会话与精确 Origin 校验；独立且不可与浏览器互换的原生 bearer 会话；CSP；严格 schema/allowlist；长度、行数、控制字符、速率、连接和输出限制；argv-only 子进程；操作前重新发现 pane 并校验 terminal 身份；纯文本渲染；敏感正文不入日志。
 
 **不在当前范围：** 公网直接暴露、多用户/RBAC、审计终端正文、任意 shell、文件浏览、pane 创建/关闭、抵御已完全控制 Mac 或客户端会话的攻击者。健康检查公开但只返回固定 `{"status":"ok"}`；它仍应只在 loopback/Serve 边界内使用。
 

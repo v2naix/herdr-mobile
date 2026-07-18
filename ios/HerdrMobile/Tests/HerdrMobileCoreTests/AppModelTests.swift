@@ -21,7 +21,11 @@ struct AppModelTests {
         try await coldLaunchExchangesStoredBootstrapToken()
         try await logoutClearsLocalAccessWhenRevocationFails()
         try await serverReplacementRequiresConfirmation()
-        print("HerdrMobileCoreTests: 7 passed")
+        try await livePaneSnapshotsDriveVisibleNavigationState()
+        try await incompatibleProtocolStopsTheNativeConnection()
+        try await outputFilteringUsesEpochSubscriptionIdentityAndRevision()
+        try nativeProtocolUsesStrictTypedJSON()
+        print("HerdrMobileCoreTests: 11 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -104,10 +108,12 @@ struct AppModelTests {
         let credentials = MemoryCredentials()
         try credentials.saveToken("bootstrap", for: "https://mac.example")
         let configuration = MemoryConfiguration(origin: "https://mac.example")
+        let live = FakeLiveConnection()
         let model = AppModel(
             sessions: FakeSessions(revokeError: .transport),
             credentials: credentials,
-            configuration: configuration
+            configuration: configuration,
+            liveConnection: live
         )
         await model.start()
 
@@ -118,6 +124,126 @@ struct AppModelTests {
         try check(model.state.origin.isEmpty, "logout should clear visible origin")
         try check(configuration.origin == nil, "logout should clear persisted origin")
         try check(try credentials.loadToken(for: "https://mac.example") == nil, "logout should delete Keychain token")
+        try check(live.cancelCount == 1, "logout should cancel the live connection")
+    }
+
+    static func nativeProtocolUsesStrictTypedJSON() throws {
+        let message = try JSONDecoder().decode(NativeServerMessage.self, from: Data("""
+        {"type":"hello","protocol_version":1,"server_epoch":"epoch-1"}
+        """.utf8))
+        try check(message == .hello(protocolVersion: 1, serverEpoch: "epoch-1"), "hello should decode through the typed protocol")
+
+        let data = try JSONEncoder().encode(NativeClientMessage.subscribe(
+            subscriptionID: "subscription-1", paneID: "w1:p1",
+            paneRef: "term-1", lines: 120
+        ))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: AnyHashable]
+        try check(object == [
+            "type": "subscribe", "subscription_id": "subscription-1",
+            "pane_id": "w1:p1", "pane_ref": "term-1", "lines": 120,
+        ], "subscribe should encode every required identity field")
+    }
+
+    static func livePaneSnapshotsDriveVisibleNavigationState() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live)
+
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(
+            serverEpoch: "epoch-1",
+            revision: 1,
+            panes: [AgentPane(
+                paneID: "w1:p1", paneRef: "term-1", title: "修复登录",
+                status: "blocked", cwd: "/repo", workspaceID: "w1"
+            )]
+        ))
+        await settle()
+        live.emit(.paneSnapshot(
+            serverEpoch: "epoch-1",
+            revision: 3,
+            panes: [AgentPane(
+                paneID: "w1:p1", paneRef: "term-1", title: "最新标题",
+                status: "working", cwd: "/repo", workspaceID: "w1"
+            )]
+        ))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 2, panes: []))
+        await settle()
+
+        try check(model.state.connection == .online, "authoritative snapshot should make the app online")
+        try check(model.state.panes.map(\.title) == ["最新标题"], "newest complete pane snapshot should replace older revisions")
+        try check(model.state.selectedPane == nil, "connection state must not drive navigation")
+    }
+
+    static func incompatibleProtocolStopsTheNativeConnection() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live)
+
+        await model.start()
+        live.emit(.hello(protocolVersion: 99, serverEpoch: "epoch-1"))
+        await settle()
+
+        try check(model.state.connection == .incompatibleProtocol, "unsupported protocol should be actionable")
+        try check(live.cancelCount == 1, "unsupported protocol should stop the connection")
+    }
+
+    static func outputFilteringUsesEpochSubscriptionIdentityAndRevision() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live, identifiers: ["subscription-1"])
+        let pane = AgentPane(
+            paneID: "w1:p1", paneRef: "term-1", title: "Agent",
+            status: "working", cwd: "/repo", workspaceID: "w1"
+        )
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [pane]))
+        await settle()
+
+        await model.openPane(pane, lines: 120)
+        try check(live.sent == [.subscribe(
+            subscriptionID: "subscription-1", paneID: "w1:p1",
+            paneRef: "term-1", lines: 120
+        )], "opening a pane should send complete identity")
+
+        live.emit(.outputSnapshot(
+            serverEpoch: "old-epoch", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 1, text: "old"
+        ))
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "other-subscription",
+            paneID: "w1:p1", paneRef: "term-1", revision: 2, text: "other"
+        ))
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 4, text: "latest full snapshot"
+        ))
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 3, text: "out of order"
+        ))
+        await settle()
+
+        try check(model.state.outputText == "latest full snapshot", "newest current full snapshot should win across a revision gap")
+        try check(model.state.selectedPane == pane, "accepted output must not alter navigation")
+    }
+
+    private static func configuredModel(
+        live: FakeLiveConnection,
+        identifiers: [String] = []
+    ) -> AppModel {
+        let credentials = MemoryCredentials()
+        try! credentials.saveToken("bootstrap", for: "https://mac.example")
+        return AppModel(
+            sessions: FakeSessions(),
+            credentials: credentials,
+            configuration: MemoryConfiguration(origin: "https://mac.example"),
+            liveConnection: live,
+            identifier: IdentifierSequence(identifiers).next
+        )
+    }
+
+    static func settle() async {
+        for _ in 0..<10 { await Task.yield() }
     }
 
     static func serverReplacementRequiresConfirmation() async throws {
@@ -134,6 +260,38 @@ struct AppModelTests {
         await model.confirmDestructiveAction()
         try check(model.state.screen == .setup, "confirmed replacement should return to setup")
         try check(configuration.origin == nil, "confirmed replacement should clear prior server")
+    }
+}
+
+@MainActor
+private final class IdentifierSequence {
+    private var values: [String]
+
+    init(_ values: [String]) { self.values = values }
+    func next() -> String { values.isEmpty ? UUID().uuidString : values.removeFirst() }
+}
+
+@MainActor
+private final class FakeLiveConnection: NativeConnectionServing {
+    private var continuation: AsyncThrowingStream<NativeServerMessage, Error>.Continuation?
+    var sent: [NativeClientMessage] = []
+    var cancelCount = 0
+
+    func open(origin: String, sessionToken: String) -> AsyncThrowingStream<NativeServerMessage, Error> {
+        AsyncThrowingStream { continuation = $0 }
+    }
+
+    func send(_ message: NativeClientMessage) async throws {
+        sent.append(message)
+    }
+
+    func cancel() {
+        cancelCount += 1
+        continuation?.finish()
+    }
+
+    func emit(_ message: NativeServerMessage) {
+        continuation?.yield(message)
     }
 }
 

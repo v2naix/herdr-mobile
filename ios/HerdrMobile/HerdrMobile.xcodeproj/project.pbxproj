@@ -13,6 +13,8 @@
 		A10000000000000000000005 /* NativeSessionHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* NativeSessionHTTPClient.swift */; };
 		A10000000000000000000006 /* KeychainCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* KeychainCredentialStore.swift */; };
 		A10000000000000000000007 /* OriginDefaultsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* OriginDefaultsStore.swift */; };
+		A10000000000000000000008 /* NativeProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* NativeProtocol.swift */; };
+		A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* NetworkWebSocketConnection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +26,8 @@
 		B10000000000000000000006 /* KeychainCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainCredentialStore.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* OriginDefaultsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OriginDefaultsStore.swift; sourceTree = "<group>"; };
 		B10000000000000000000008 /* HerdrMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HerdrMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000009 /* NativeProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProtocol.swift; sourceTree = "<group>"; };
+		B10000000000000000000010 /* NetworkWebSocketConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkWebSocketConnection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +66,8 @@
 				B10000000000000000000005 /* NativeSessionHTTPClient.swift */,
 				B10000000000000000000006 /* KeychainCredentialStore.swift */,
 				B10000000000000000000007 /* OriginDefaultsStore.swift */,
+				B10000000000000000000009 /* NativeProtocol.swift */,
+				B10000000000000000000010 /* NetworkWebSocketConnection.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -139,6 +145,8 @@
 				A10000000000000000000005 /* NativeSessionHTTPClient.swift in Sources */,
 				A10000000000000000000006 /* KeychainCredentialStore.swift in Sources */,
 				A10000000000000000000007 /* OriginDefaultsStore.swift in Sources */,
+				A10000000000000000000008 /* NativeProtocol.swift in Sources */,
+				A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

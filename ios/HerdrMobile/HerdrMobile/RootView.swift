@@ -100,15 +100,54 @@ private struct ConfiguredView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        ContentUnavailableView {
-            Label("服务器已配置", systemImage: "checkmark.shield")
-        } description: {
-            Text(model.state.origin)
-        } actions: {
-            Text("实时 pane 浏览将在下一阶段启用。")
-                .foregroundStyle(.secondary)
+        List {
+            Section {
+                Label(connectionLabel, systemImage: connectionSymbol)
+                    .foregroundStyle(connectionColor)
+                if let error = model.state.error {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Agent panes") {
+                ForEach(model.state.panes) { pane in
+                    NavigationLink(value: pane) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(pane.title)
+                                    .font(.headline)
+                                Spacer()
+                                Text(pane.status)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if !pane.cwd.isEmpty {
+                                Text(pane.cwd)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            if !pane.workspaceID.isEmpty {
+                                Text("Workspace \(pane.workspaceID)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .overlay {
+            if model.state.panes.isEmpty && model.state.connection == .online {
+                ContentUnavailableView("没有 Agent pane", systemImage: "rectangle.stack")
+            }
         }
         .navigationTitle("Herdr Mobile")
+        .navigationDestination(for: AgentPane.self) { pane in
+            PaneDetailView(model: model, pane: pane)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -123,5 +162,56 @@ private struct ConfiguredView: View {
                 }
             }
         }
+    }
+
+    private var connectionLabel: String {
+        switch model.state.connection {
+        case .disconnected: "未连接"
+        case .connecting: "正在连接"
+        case .online: "在线"
+        case .offline: "连接已断开"
+        case .incompatibleProtocol: "协议不兼容"
+        case .failed: "连接失败"
+        }
+    }
+
+    private var connectionSymbol: String {
+        model.state.connection == .online ? "checkmark.circle.fill" : "network.slash"
+    }
+
+    private var connectionColor: Color {
+        model.state.connection == .online ? .green : .secondary
+    }
+}
+
+private struct PaneDetailView: View {
+    @ObservedObject var model: AppModel
+    let pane: AgentPane
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Text(model.state.outputText.isEmpty ? "正在等待输出…" : model.state.outputText)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                Color.clear
+                    .frame(height: 1)
+                    .id("output-bottom")
+            }
+            .background(Color.black.opacity(0.92))
+            .foregroundStyle(.white)
+            .onChange(of: model.state.outputText) {
+                proxy.scrollTo("output-bottom", anchor: .bottom)
+            }
+            .task(id: pane.id) {
+                await model.openPane(pane)
+            }
+            .onDisappear {
+                model.closePane()
+            }
+        }
+        .navigationTitle(pane.title)
     }
 }

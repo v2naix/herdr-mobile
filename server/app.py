@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -25,8 +26,27 @@ MAX_WS_MESSAGE = 8 * 1024
 MAX_CONNECTIONS = 8
 RATE_COUNT = 30
 RATE_WINDOW = 10.0
+NATIVE_PROTOCOL_VERSION = 1
 
 logger = logging.getLogger("herdr_mobile")
+
+
+class PaneSnapshotVersions:
+    def __init__(self):
+        self.revision = 0
+        self.serialized = ""
+        self.lock = asyncio.Lock()
+
+    async def snapshot(
+        self, adapter: HerdrAdapter
+    ) -> tuple[list[dict[str, str]], int, str]:
+        async with self.lock:
+            panes = await adapter.list_panes()
+            serialized = json.dumps(panes, sort_keys=True)
+            if serialized != self.serialized:
+                self.revision += 1
+                self.serialized = serialized
+            return panes, self.revision, serialized
 
 
 class ConnectionLimit:
@@ -56,7 +76,9 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="herdr-mobile", docs_url=None, redoc_url=None, openapi_url=None)
     limit = ConnectionLimit(MAX_CONNECTIONS)
+    pane_versions = PaneSnapshotVersions()
     session_attempts: deque[float] = deque()
+    server_epoch = secrets.token_urlsafe(24)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -130,20 +152,37 @@ def create_app(
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
-        origin = ws.headers.get("origin")
-        if origin not in allowed_origins:
-            await ws.close(code=1008, reason="origin rejected")
-            return
+        authorization = ws.headers.get("authorization", "")
+        native = authorization.startswith("Bearer ")
+        if native:
+            authenticated = not auth_enabled or sessions.valid(authorization[7:], "native")
+        else:
+            origin = ws.headers.get("origin")
+            if origin not in allowed_origins:
+                await ws.close(code=1008, reason="origin rejected")
+                return
+            authenticated = not auth_enabled or sessions.valid(
+                ws.cookies.get(COOKIE), "browser"
+            )
         await ws.accept()
-        if auth_enabled and not sessions.valid(ws.cookies.get(COOKIE), "browser"):
+        if not authenticated:
             await ws.close(code=1008, reason="authentication required")
             return
         if not await limit.acquire():
             await ws.close(code=1013, reason="too many connections")
             return
-        logger.info(json.dumps({"event": "ws_connected", "active": limit.active}))
+        logger.info(json.dumps({
+            "event": "ws_connected", "active": limit.active,
+            "presentation": "native" if native else "browser",
+        }))
         try:
-            await _serve_socket(ws, adapter)
+            await _serve_socket(
+                ws,
+                adapter,
+                native=native,
+                server_epoch=server_epoch,
+                pane_versions=pane_versions,
+            )
         finally:
             await limit.release()
             logger.info(json.dumps({"event": "ws_disconnected", "active": limit.active}))
@@ -160,11 +199,27 @@ def create_app(
     return app
 
 
-async def _serve_socket(ws: WebSocket, adapter: HerdrAdapter) -> None:
+async def _serve_socket(
+    ws: WebSocket,
+    adapter: HerdrAdapter,
+    *,
+    native: bool = False,
+    server_epoch: str = "",
+    pane_versions: PaneSnapshotVersions | None = None,
+) -> None:
     selected: tuple[str, str, int] | None = None
+    subscription_id: str | None = None
     recent: deque[float] = deque()
     last_snapshot = ""
     last_output = ""
+    local_pane_revision = 0
+    output_revision = 0
+    if native:
+        await ws.send_json({
+            "type": "hello",
+            "protocol_version": NATIVE_PROTOCOL_VERSION,
+            "server_epoch": server_epoch,
+        })
     while True:
         try:
             text = await asyncio.wait_for(ws.receive_text(), timeout=2.0)
@@ -186,7 +241,10 @@ async def _serve_socket(ws: WebSocket, adapter: HerdrAdapter) -> None:
             try:
                 data = json.loads(text)
                 if isinstance(data, dict) and data.get("type") == "subscribe":
-                    if set(data) != {"type", "pane_id", "pane_ref", "lines"}:
+                    allowed = {"type", "pane_id", "pane_ref", "lines"}
+                    if native:
+                        allowed.add("subscription_id")
+                    if set(data) != allowed:
                         raise ProtocolError("invalid subscribe command")
                     pane_id, pane_ref = data["pane_id"], data["pane_ref"]
                     if (
@@ -194,8 +252,30 @@ async def _serve_socket(ws: WebSocket, adapter: HerdrAdapter) -> None:
                         or not isinstance(pane_ref, str) or not 1 <= len(pane_ref) <= 128
                     ):
                         raise ProtocolError("invalid pane identity")
-                    selected = (pane_id, pane_ref, validate_lines(data["lines"]))
-                    last_output = ""
+                    lines = validate_lines(data["lines"])
+                    if native:
+                        candidate = data["subscription_id"]
+                        if not isinstance(candidate, str) or not 1 <= len(candidate) <= 128:
+                            raise ProtocolError("invalid subscription_id")
+                        output = await adapter.read(pane_id, pane_ref, lines)
+                        subscription_id = candidate
+                        selected = (pane_id, pane_ref, lines)
+                        output_revision = 1
+                        last_output = output
+                        await ws.send_json({
+                            "type": "output_snapshot",
+                            "server_epoch": server_epoch,
+                            "subscription_id": subscription_id,
+                            "pane_id": pane_id,
+                            "pane_ref": pane_ref,
+                            "revision": output_revision,
+                            "text": output,
+                        })
+                    else:
+                        selected = (pane_id, pane_ref, lines)
+                        last_output = ""
+                elif native:
+                    raise ProtocolError("invalid native command type")
                 else:
                     command = parse_command(data)
                     if isinstance(command, SendText):
@@ -207,16 +287,46 @@ async def _serve_socket(ws: WebSocket, adapter: HerdrAdapter) -> None:
                     await ws.send_json({"type": "ack", "command": data.get("type")})
             except (json.JSONDecodeError, ProtocolError, HerdrError, KeyError) as error:
                 await ws.send_json({"type": "error", "error": str(error)})
+                if native:
+                    continue
         try:
-            panes = await adapter.list_panes()
-            serialized = json.dumps(panes, sort_keys=True)
+            if pane_versions is None:
+                panes = await adapter.list_panes()
+                serialized = json.dumps(panes, sort_keys=True)
+                if serialized != last_snapshot:
+                    local_pane_revision += 1
+                pane_revision = local_pane_revision
+            else:
+                panes, pane_revision, serialized = await pane_versions.snapshot(adapter)
             if serialized != last_snapshot:
-                await ws.send_json({"type": "snapshot", "panes": panes})
+                if native:
+                    await ws.send_json({
+                        "type": "pane_snapshot",
+                        "server_epoch": server_epoch,
+                        "revision": pane_revision,
+                        "panes": panes,
+                    })
+                else:
+                    await ws.send_json({"type": "snapshot", "panes": panes})
                 last_snapshot = serialized
             if selected:
                 output = await adapter.read(*selected)
                 if output != last_output:
-                    await ws.send_json({"type": "output", "pane_id": selected[0], "text": output})
+                    output_revision += 1
+                    if native:
+                        await ws.send_json({
+                            "type": "output_snapshot",
+                            "server_epoch": server_epoch,
+                            "subscription_id": subscription_id,
+                            "pane_id": selected[0],
+                            "pane_ref": selected[1],
+                            "revision": output_revision,
+                            "text": output,
+                        })
+                    else:
+                        await ws.send_json({
+                            "type": "output", "pane_id": selected[0], "text": output
+                        })
                     last_output = output
         except HerdrError as error:
             await ws.send_json({"type": "error", "error": str(error)})

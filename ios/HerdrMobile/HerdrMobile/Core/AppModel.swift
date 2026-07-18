@@ -6,25 +6,46 @@ public enum AppScreen: Equatable, Sendable {
     case configured
 }
 
+public enum NativeConnectionState: Equatable, Sendable {
+    case disconnected
+    case connecting
+    case online
+    case offline
+    case incompatibleProtocol
+    case failed
+}
+
 public struct AppViewState: Equatable, Sendable {
     public var screen: AppScreen
     public var origin: String
     public var token: String
     public var error: String?
     public var isWorking: Bool
+    public var connection: NativeConnectionState
+    public var panes: [AgentPane]
+    public var selectedPane: AgentPane?
+    public var outputText: String
 
     public init(
         screen: AppScreen = .setup,
         origin: String = "",
         token: String = "",
         error: String? = nil,
-        isWorking: Bool = false
+        isWorking: Bool = false,
+        connection: NativeConnectionState = .disconnected,
+        panes: [AgentPane] = [],
+        selectedPane: AgentPane? = nil,
+        outputText: String = ""
     ) {
         self.screen = screen
         self.origin = origin
         self.token = token
         self.error = error
         self.isWorking = isWorking
+        self.connection = connection
+        self.panes = panes
+        self.selectedPane = selectedPane
+        self.outputText = outputText
     }
 }
 
@@ -83,16 +104,27 @@ public final class AppModel: ObservableObject {
     private let sessions: NativeSessionServing
     private let credentials: CredentialStoring
     private let configuration: OriginPersisting
+    private let liveConnection: NativeConnectionServing?
+    private let identifier: @MainActor () -> String
     private var nativeSession: NativeSession?
+    private var connectionTask: Task<Void, Never>?
+    private var serverEpoch: String?
+    private var paneRevision = 0
+    private var subscriptionID: String?
+    private var outputRevision = 0
 
     public init(
         sessions: NativeSessionServing,
         credentials: CredentialStoring,
-        configuration: OriginPersisting
+        configuration: OriginPersisting,
+        liveConnection: NativeConnectionServing? = nil,
+        identifier: @escaping @MainActor () -> String = { UUID().uuidString }
     ) {
         self.sessions = sessions
         self.credentials = credentials
         self.configuration = configuration
+        self.liveConnection = liveConnection
+        self.identifier = identifier
     }
 
     public func start() async {
@@ -104,8 +136,14 @@ public final class AppModel: ObservableObject {
                 state.isWorking = false
                 return
             }
-            nativeSession = try await sessions.exchange(origin: origin, bootstrapToken: token)
-            state = AppViewState(screen: .configured, origin: origin)
+            let session = try await sessions.exchange(origin: origin, bootstrapToken: token)
+            nativeSession = session
+            state = AppViewState(
+                screen: .configured,
+                origin: origin,
+                connection: liveConnection == nil ? .disconnected : .connecting
+            )
+            beginLiveConnection(origin: origin, sessionToken: session.token)
         } catch {
             if error as? NativeSessionError == .invalidCredentials {
                 try? credentials.deleteToken(for: origin)
@@ -152,7 +190,12 @@ public final class AppModel: ObservableObject {
             }
             configuration.saveOrigin(origin)
             nativeSession = session
-            state = AppViewState(screen: .configured, origin: origin)
+            state = AppViewState(
+                screen: .configured,
+                origin: origin,
+                connection: liveConnection == nil ? .disconnected : .connecting
+            )
+            beginLiveConnection(origin: origin, sessionToken: session.token)
         } catch {
             let rejected = error as? NativeSessionError == .invalidCredentials
             state = AppViewState(
@@ -161,6 +204,34 @@ public final class AppModel: ObservableObject {
                 error: message(for: error)
             )
         }
+    }
+
+    public func openPane(_ pane: AgentPane, lines: Int = 120) async {
+        guard state.panes.contains(pane), let liveConnection else { return }
+        let boundedLines = max(1, min(lines, 300))
+        let newSubscriptionID = identifier()
+        state.selectedPane = pane
+        state.outputText = ""
+        subscriptionID = newSubscriptionID
+        outputRevision = 0
+        do {
+            try await liveConnection.send(.subscribe(
+                subscriptionID: newSubscriptionID,
+                paneID: pane.paneID,
+                paneRef: pane.paneRef,
+                lines: boundedLines
+            ))
+        } catch {
+            state.connection = .failed
+            state.error = "无法订阅 pane 输出。"
+        }
+    }
+
+    public func closePane() {
+        state.selectedPane = nil
+        state.outputText = ""
+        subscriptionID = nil
+        outputRevision = 0
     }
 
     public func requestServerReplacement() {
@@ -181,6 +252,9 @@ public final class AppModel: ObservableObject {
         let oldOrigin = configuration.loadOrigin() ?? state.origin
         let oldSession = nativeSession
 
+        connectionTask?.cancel()
+        connectionTask = nil
+        liveConnection?.cancel()
         nativeSession = nil
         configuration.clearOrigin()
         var deletionError: Error?
@@ -195,6 +269,71 @@ public final class AppModel: ObservableObject {
 
         if let oldSession, !oldOrigin.isEmpty {
             try? await sessions.revoke(origin: oldOrigin, sessionToken: oldSession.token)
+        }
+    }
+
+    private func beginLiveConnection(origin: String, sessionToken: String) {
+        guard let liveConnection else { return }
+        connectionTask?.cancel()
+        let messages = liveConnection.open(origin: origin, sessionToken: sessionToken)
+        connectionTask = Task { [weak self] in
+            do {
+                for try await message in messages {
+                    guard !Task.isCancelled else { return }
+                    self?.accept(message)
+                }
+                if self?.state.connection != .incompatibleProtocol {
+                    self?.state.connection = .offline
+                }
+            } catch {
+                if self?.state.connection != .incompatibleProtocol {
+                    self?.state.connection = .failed
+                    self?.state.error = "实时连接已断开。"
+                }
+            }
+        }
+    }
+
+    private func accept(_ message: NativeServerMessage) {
+        switch message {
+        case let .hello(protocolVersion, newEpoch):
+            guard protocolVersion == nativeProtocolVersion else {
+                state.connection = .incompatibleProtocol
+                state.error = "服务器协议不兼容，请升级客户端或服务器。"
+                liveConnection?.cancel()
+                return
+            }
+            if serverEpoch != newEpoch {
+                serverEpoch = newEpoch
+                paneRevision = 0
+                outputRevision = 0
+                state.panes = []
+            }
+        case let .paneSnapshot(messageEpoch, revision, panes):
+            guard messageEpoch == serverEpoch, revision > paneRevision else { return }
+            paneRevision = revision
+            state.panes = panes
+            state.connection = .online
+            state.error = nil
+        case let .outputSnapshot(
+            messageEpoch,
+            messageSubscriptionID,
+            paneID,
+            paneRef,
+            revision,
+            text
+        ):
+            guard messageEpoch == serverEpoch,
+                  messageSubscriptionID == subscriptionID,
+                  let selectedPane = state.selectedPane,
+                  selectedPane.paneID == paneID,
+                  selectedPane.paneRef == paneRef,
+                  revision > outputRevision
+            else { return }
+            outputRevision = revision
+            state.outputText = text
+        case let .error(error):
+            state.error = error
         }
     }
 
