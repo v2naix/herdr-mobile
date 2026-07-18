@@ -50,7 +50,7 @@ private struct SetupView: View {
                     "https://mac.example.ts.net",
                     text: Binding(
                         get: { model.state.origin },
-                        set: model.updateOrigin
+                        set: { model.updateOrigin($0) }
                     )
                 )
 
@@ -58,7 +58,7 @@ private struct SetupView: View {
                     "Bootstrap token",
                     text: Binding(
                         get: { model.state.token },
-                        set: model.updateToken
+                        set: { model.updateToken($0) }
                     )
                 )
             } header: {
@@ -467,7 +467,7 @@ private struct ReplyEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: Binding(
                     get: { model.state.replyDraft },
-                    set: model.updateReplyDraft
+                    set: { model.updateReplyDraft($0) }
                 ))
                 .font(.body)
                 .disabled(replyIsLocked)

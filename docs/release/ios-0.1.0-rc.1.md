@@ -12,7 +12,7 @@
 
 ```text
 提交（git rev-parse 'ios-0.1.0-rc.1^{commit}'）：`191094449311a9e77f03a465109ff6846a36d34d`
-Xcode 版本（xcodebuild -version）：受阻（仅有 CommandLineTools，`xcodebuild` 不可用）
+Xcode 版本（xcodebuild -version）：Xcode 26.6（Build 17F113），iPhoneOS 26.5 SDK
 iPhone 型号：____________________________________________________
 iOS 版本：_______________________________________________________
 服务端 epoch：___________________________________________________
@@ -53,6 +53,12 @@ git diff --check
 自动化覆盖包括浏览器/原生认证隔离、会话过期与撤销、epoch/version、完整 pane/output 快照、身份校验、命令确认与去重、PWA 兼容；原生顶层覆盖设置、导航、reader、命令、生命周期、重连、单次重新认证、陈旧身份、诊断、更换服务器及退出登录。聚焦检查覆盖 Keychain 查询策略、原生 HTTP bearer 请求、WebSocket 握手策略、ping、close、取消和消息上限。
 
 当前命令行开发目录不包含完整 Xcode 和 iPhoneOS SDK。若上述限制仍存在，只记录直接 SDK 检查结果；不得修改系统开发者目录、运行 first-launch/repair、请求提权或弱化系统安全。完整 Xcode 构建与安装必须在下方目标设备步骤完成。
+
+## RC.1 Xcode 构建结论
+
+2026-07-18 后续发现完整 Xcode 可通过命令级 `DEVELOPER_DIR` 使用，无需修改系统开发者设置。针对候选引用执行 unsigned generic iOS Release 构建时，Swift 6.3.3 前端在 IRGen 阶段稳定崩溃，候选无法产出可安装构建。
+
+最小化确认三个 SwiftUI `Binding` setter 的 actor-isolated 方法引用均可独立触发该编译器崩溃；改为语义等价的显式闭包后，Core + SwiftUI 最小编译以及原始 Debug/Release iPhoneOS 构建均通过。该修复属于候选代码变更，因此 **RC.1 失败且不再作为验收输入**；修复必须进入新的候选引用并刷新受影响证据。
 
 ## Safari PWA 回归步骤
 
