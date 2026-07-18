@@ -62,10 +62,10 @@ private enum PaneStatus: String, CaseIterable, Hashable {
     // Keep the existing Herdr web status palette and convey status without color alone.
     var color: Color {
         switch self {
-        case .blocked: Color(red: 1, green: 0.694, blue: 0.29)
-        case .done: Color(red: 0.71, green: 0.55, blue: 0.80)
-        case .working: Color(red: 0.41, green: 0.65, blue: 1)
-        case .idle: Color(red: 0.48, green: 0.84, blue: 0.63)
+        case .blocked: Color(red: 1, green: 177.0 / 255.0, blue: 74.0 / 255.0) // #ffb14a
+        case .done: Color(red: 181.0 / 255.0, green: 140.0 / 255.0, blue: 204.0 / 255.0) // #b58cff
+        case .working: Color(red: 104.0 / 255.0, green: 165.0 / 255.0, blue: 1) // #68a5ff
+        case .idle: Color(red: 122.0 / 255.0, green: 214.0 / 255.0, blue: 160.0 / 255.0) // #7ad6a0
         }
     }
 
@@ -124,8 +124,6 @@ private struct TerminalFirstPrototype: View {
     @State private var selected = DemoPane.all[2]
     @State private var commandNote: String?
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
-
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -146,31 +144,25 @@ private struct TerminalFirstPrototype: View {
             .padding(.top, 12)
             .padding(.bottom, 9)
 
-            LazyVGrid(columns: columns, spacing: 8) {
+            HStack(spacing: 8) {
                 ForEach(PaneStatus.allCases, id: \.self) { status in
                     statusInbox(status)
                 }
             }
             .padding(.horizontal, 12)
-
-            HStack(spacing: 8) {
-                Image(systemName: selected.status.symbol)
-                    .foregroundStyle(selected.color)
-                Text(selected.title)
-                    .font(.headline.monospaced())
-                    .lineLimit(1)
-                Text("· \(selected.detail)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            .padding(.bottom, 10)
 
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("TERMINAL").font(.caption.weight(.bold)).tracking(1.4)
+                HStack(spacing: 8) {
+                    Image(systemName: selected.status.symbol)
+                        .foregroundStyle(selected.color)
+                    Text(selected.title)
+                        .font(.headline.monospaced())
+                        .lineLimit(1)
+                    Text("· \(selected.detail)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Spacer()
                     Image(systemName: "text.line.first.and.arrowtriangle.forward")
                         .foregroundStyle(.secondary)
@@ -263,23 +255,17 @@ private struct TerminalFirstPrototype: View {
         Button {
             if let first = panes.first { selected = first }
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: 5) {
                 Image(systemName: status.symbol)
                     .font(.title3)
-                    .foregroundStyle(status.color)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(status.title).font(.caption.weight(.bold))
-                    Text("\(panes.count) 个任务").font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
                 Text("\(panes.count)")
-                    .font(.title3.monospacedDigit().weight(.bold))
-                    .foregroundStyle(status.color)
+                    .font(.headline.monospacedDigit().weight(.bold))
             }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected.status == status ? status.color.opacity(0.17) : Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(status.color.opacity(selected.status == status ? 0.9 : 0.35), lineWidth: selected.status == status ? 2 : 1))
+            .foregroundStyle(status.color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(selected.status == status ? status.color.opacity(0.19) : Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(status.color.opacity(selected.status == status ? 0.9 : 0.35), lineWidth: selected.status == status ? 2 : 1))
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -295,6 +281,7 @@ private struct TerminalFirstPrototype: View {
                 }
             }
         }
+        .accessibilityLabel("\(status.title)，\(panes.count) 个任务")
         .accessibilityHint("轻点选择该状态的最新任务；长按选择其他任务")
     }
 }
