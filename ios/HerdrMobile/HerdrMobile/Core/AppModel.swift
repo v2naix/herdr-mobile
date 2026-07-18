@@ -620,8 +620,8 @@ public final class AppModel: ObservableObject {
         pendingConfirmation = nil
     }
 
-    public func confirmDestructiveAction() async {
-        guard pendingConfirmation != nil else { return }
+    public func confirmDestructiveAction(_ presentedAction: DestructiveAction? = nil) async {
+        guard presentedAction != nil || pendingConfirmation != nil else { return }
         pendingConfirmation = nil
         let oldOrigin = configuration.loadOrigin() ?? state.origin
         let oldSession = nativeSession

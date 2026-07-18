@@ -20,8 +20,10 @@ struct RootView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button(confirmationButtonTitle, role: .destructive) {
-                Task { await model.confirmDestructiveAction() }
+            if let presentedAction = model.pendingConfirmation {
+                Button(confirmationButtonTitle, role: .destructive) {
+                    Task { await model.confirmDestructiveAction(presentedAction) }
+                }
             }
             Button("取消", role: .cancel) {
                 model.cancelDestructiveAction()

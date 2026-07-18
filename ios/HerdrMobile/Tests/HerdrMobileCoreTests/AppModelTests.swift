@@ -36,6 +36,7 @@ struct AppModelTests {
         try keychainStoreUsesPasscodeBoundDeviceOnlyItemsAndDeletesLocally()
         try await nativeWebSocketPolicyCoversHandshakeCloseAndCancellation()
         try await logoutClearsLocalAccessWhenRevocationFails()
+        try await confirmedLogoutSurvivesPresentationDismissal()
         try await serverReplacementRequiresConfirmation()
         try await livePaneSnapshotsDriveVisibleNavigationState()
         try await incompatibleProtocolStopsTheNativeConnection()
@@ -53,7 +54,7 @@ struct AppModelTests {
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 37 passed")
+        print("HerdrMobileCoreTests: 38 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -500,6 +501,27 @@ struct AppModelTests {
         try check(configuration.origin == nil, "logout should clear persisted origin")
         try check(try credentials.loadToken(for: "https://mac.example") == nil, "logout should delete Keychain token")
         try check(live.cancelCount == 1, "logout should cancel the live connection")
+    }
+
+    static func confirmedLogoutSurvivesPresentationDismissal() async throws {
+        let credentials = MemoryCredentials()
+        try credentials.saveToken("bootstrap", for: "https://mac.example")
+        let configuration = MemoryConfiguration(origin: "https://mac.example")
+        let model = AppModel(
+            sessions: FakeSessions(),
+            credentials: credentials,
+            configuration: configuration
+        )
+        await model.start()
+
+        model.requestLogout()
+        let presentedAction = try model.pendingConfirmation
+            .unwrap("logout should present confirmation")
+        model.cancelDestructiveAction()
+        await model.confirmDestructiveAction(presentedAction)
+
+        try check(model.state.screen == .setup, "a confirmed logout should survive SwiftUI dismissing its presentation binding first")
+        try check(configuration.origin == nil, "confirmed logout should still clear persisted access")
     }
 
     static func nativeProtocolUsesStrictTypedJSON() throws {
