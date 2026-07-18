@@ -46,16 +46,52 @@ struct MobileUIPrototypeRootView: View {
     }
 }
 
+private enum PaneStatus: String, CaseIterable, Hashable {
+    case blocked, done, working, idle
+
+    var title: String {
+        switch self {
+        case .blocked: "Blocked"
+        case .done: "Done"
+        case .working: "Working"
+        case .idle: "Idle"
+        }
+    }
+
+    // Keep the existing Herdr web status palette and convey status without color alone.
+    var color: Color {
+        switch self {
+        case .blocked: Color(red: 1, green: 0.694, blue: 0.29)
+        case .done: Color(red: 0.71, green: 0.55, blue: 0.80)
+        case .working: Color(red: 0.41, green: 0.65, blue: 1)
+        case .idle: Color(red: 0.48, green: 0.84, blue: 0.63)
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .blocked: "exclamationmark.circle.fill"
+        case .done: "checkmark.circle.fill"
+        case .working: "arrow.triangle.2.circlepath.circle.fill"
+        case .idle: "pause.circle.fill"
+        }
+    }
+}
+
 private struct DemoPane: Identifiable, Hashable {
     let title: String
     let detail: String
-    let color: Color
+    let status: PaneStatus
     var id: String { title }
+    var color: Color { status.color }
 
     static let all = [
-        DemoPane(title: "herdr-mobile", detail: "实现 reader 交互", color: .cyan),
-        DemoPane(title: "release-check", detail: "等待验收结果", color: .orange),
-        DemoPane(title: "docs", detail: "正在整理变更", color: .mint),
+        DemoPane(title: "release-check", detail: "等待验收结果", status: .blocked),
+        DemoPane(title: "changelog", detail: "已整理完变更", status: .done),
+        DemoPane(title: "herdr-mobile", detail: "实现 reader 交互", status: .working),
+        DemoPane(title: "docs", detail: "等待下一项工作", status: .idle),
+        DemoPane(title: "connection", detail: "正在恢复订阅", status: .working),
+        DemoPane(title: "test-suite", detail: "等待执行", status: .idle),
     ]
 }
 
@@ -82,10 +118,12 @@ private struct PrototypeNotice: View {
     }
 }
 
-// A: terminal is the product; panes are a compact context strip and commands hug the output.
+// A: terminal is the product. Four visible status inboxes select its context; commands hug its output.
 private struct TerminalFirstPrototype: View {
-    @State private var selected = DemoPane.all[0]
+    @State private var selected = DemoPane.all[2]
     @State private var commandNote: String?
+
+    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -94,7 +132,7 @@ private struct TerminalFirstPrototype: View {
                     Text("HERDR")
                         .font(.caption.weight(.black))
                         .tracking(2)
-                    Text("3 个 Agent 正在运行")
+                    Text("长按暂存箱切换任务")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -105,40 +143,39 @@ private struct TerminalFirstPrototype: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
-            .padding(.bottom, 10)
+            .padding(.bottom, 9)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 9) {
-                    ForEach(DemoPane.all) { pane in
-                        Button {
-                            selected = pane
-                        } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Circle().fill(pane.color).frame(width: 7, height: 7)
-                                Text(pane.title).font(.caption.weight(.bold))
-                                Text(pane.detail).font(.caption2).lineLimit(1)
-                            }
-                            .frame(width: 132, alignment: .leading)
-                            .padding(11)
-                            .background(selected == pane ? Color.primary.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 13))
-                            .overlay(RoundedRectangle(cornerRadius: 13).stroke(selected == pane ? pane.color : .secondary.opacity(0.25), lineWidth: selected == pane ? 2 : 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(PaneStatus.allCases, id: \.self) { status in
+                    statusInbox(status)
                 }
-                .padding(.horizontal, 20)
             }
-            .padding(.bottom, 12)
+            .padding(.horizontal, 12)
+
+            HStack(spacing: 8) {
+                Image(systemName: selected.status.symbol)
+                    .foregroundStyle(selected.color)
+                Text(selected.title)
+                    .font(.headline.monospaced())
+                    .lineLimit(1)
+                Text("· \(selected.detail)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Circle().fill(selected.color).frame(width: 8, height: 8)
-                    Text(selected.title).font(.headline.monospaced())
+                    Text("TERMINAL").font(.caption.weight(.bold)).tracking(1.4)
                     Spacer()
                     Image(systemName: "text.line.first.and.arrowtriangle.forward")
                         .foregroundStyle(.secondary)
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
                 Divider().overlay(.white.opacity(0.15))
                 ScrollView {
                     Text(demoOutput)
@@ -151,31 +188,75 @@ private struct TerminalFirstPrototype: View {
             .background(Color(red: 0.04, green: 0.07, blue: 0.06), in: RoundedRectangle(cornerRadius: 20))
             .padding(.horizontal, 12)
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 if let commandNote {
                     Text(commandNote).font(.caption).foregroundStyle(.orange)
                 }
-                HStack(spacing: 8) {
-                    Button("回复") { commandNote = "原型不会发送回复" }
-                        .buttonStyle(.borderedProminent)
-                    ForEach(["Enter", "Esc", "y", "n"], id: \.self) { key in
-                        Button(key) { commandNote = "“\(key)”仅为演示" }
-                            .buttonStyle(.bordered)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button("回复") { commandNote = "原型不会发送回复" }
+                            .buttonStyle(.borderedProminent)
+                        ForEach(["Enter", "Esc", "y", "n", "批准", "拒绝"], id: \.self) { key in
+                            Button(key) { commandNote = "“\(key)”仅为演示" }
+                                .buttonStyle(.bordered)
+                        }
+                        Menu {
+                            Button("Ctrl+C") { commandNote = "原型不会发送按键" }
+                            Button("Tab") { commandNote = "原型不会发送按键" }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    Menu {
-                        Button("Ctrl+C") { commandNote = "原型不会发送按键" }
-                        Button("Tab") { commandNote = "原型不会发送按键" }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                    }
-                    .buttonStyle(.bordered)
+                    .padding(.horizontal, 12)
                 }
                 PrototypeNotice()
             }
-            .padding(12)
+            .padding(.top, 10)
             .padding(.bottom, 64)
         }
         .background(Color(uiColor: .systemBackground))
+    }
+
+    @ViewBuilder
+    private func statusInbox(_ status: PaneStatus) -> some View {
+        let panes = DemoPane.all.filter { $0.status == status }
+        Button {
+            if let first = panes.first { selected = first }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: status.symbol)
+                    .font(.title3)
+                    .foregroundStyle(status.color)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(status.title).font(.caption.weight(.bold))
+                    Text("\(panes.count) 个任务").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(panes.count)")
+                    .font(.title3.monospacedDigit().weight(.bold))
+                    .foregroundStyle(status.color)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected.status == status ? status.color.opacity(0.17) : Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(status.color.opacity(selected.status == status ? 0.9 : 0.35), lineWidth: selected.status == status ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if panes.isEmpty {
+                Text("没有任务")
+            } else {
+                ForEach(panes) { pane in
+                    Button {
+                        selected = pane
+                    } label: {
+                        Label(pane.title, systemImage: pane == selected ? "checkmark" : status.symbol)
+                    }
+                }
+            }
+        }
+        .accessibilityHint("轻点选择该状态的最新任务；长按选择其他任务")
     }
 }
 
