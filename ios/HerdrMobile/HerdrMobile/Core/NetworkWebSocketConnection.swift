@@ -2,39 +2,67 @@ import Foundation
 import Network
 
 @available(iOS 26.0, macOS 26.0, *)
-@MainActor
-final class NetworkWebSocketConnection: NativeConnectionServing {
-    private static let maximumMessageSize = 8 * 1024
+@_spi(Testing) public struct NativeWebSocketHandshake: Equatable, Sendable {
+    public let url: URL
+    public let authorizationHeader: String
+    public let autoReplyPing: Bool
+    public let maximumMessageSize: Int
+}
+
+@available(iOS 26.0, macOS 26.0, *)
+@_spi(Testing) @MainActor
+public final class NetworkWebSocketConnection: NativeConnectionServing {
+    @_spi(Testing) public static let maximumMessageSize = 8 * 1024
 
     private var connection: NetworkConnection<WebSocket>?
     private var receiveTask: Task<Void, Never>?
-    var pathEventHandler: (@MainActor (NativePathEvent) -> Void)?
+    private var streamContinuation: AsyncThrowingStream<NativeServerMessage, Error>.Continuation?
+    private var streamGeneration = 0
+    public var pathEventHandler: (@MainActor (NativePathEvent) -> Void)?
 
-    init() {}
+    public init() {}
 
-    func open(
+    @_spi(Testing) public static func handshake(
         origin: String,
         sessionToken: String
-    ) -> AsyncThrowingStream<NativeServerMessage, Error> {
-        cancel()
+    ) throws -> NativeWebSocketHandshake {
         guard var components = URLComponents(string: origin) else {
-            return failedStream(NativeConnectionError.invalidEndpoint)
+            throw NativeConnectionError.invalidEndpoint
         }
         components.scheme = "wss"
         components.path = "/ws"
         guard let url = components.url else {
-            return failedStream(NativeConnectionError.invalidEndpoint)
+            throw NativeConnectionError.invalidEndpoint
+        }
+        return NativeWebSocketHandshake(
+            url: url,
+            authorizationHeader: "Bearer \(sessionToken)",
+            autoReplyPing: true,
+            maximumMessageSize: maximumMessageSize
+        )
+    }
+
+    public func open(
+        origin: String,
+        sessionToken: String
+    ) -> AsyncThrowingStream<NativeServerMessage, Error> {
+        cancel()
+        let handshake: NativeWebSocketHandshake
+        do {
+            handshake = try Self.handshake(origin: origin, sessionToken: sessionToken)
+        } catch {
+            return failedStream(error)
         }
 
         let connection: NetworkConnection<WebSocket> = NetworkConnection(
-            to: NWEndpoint.url(url)
+            to: NWEndpoint.url(handshake.url)
         ) {
             WebSocket {
                 TLS()
             }
-            .additionalHeaders([("Authorization", "Bearer \(sessionToken)")])
-            .autoReplyPing(true)
-            .maximumMessageSize(Self.maximumMessageSize)
+            .additionalHeaders([("Authorization", handshake.authorizationHeader)])
+            .autoReplyPing(handshake.autoReplyPing)
+            .maximumMessageSize(handshake.maximumMessageSize)
         }
         connection.onViabilityUpdate { [weak self] _, isViable in
             self?.pathEventHandler?(.viabilityChanged(isViable))
@@ -44,26 +72,18 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
             self?.pathEventHandler?(.betterPathAvailable)
         }
         self.connection = connection
+        let generation = streamGeneration
 
         return AsyncThrowingStream { continuation in
+            streamContinuation = continuation
             receiveTask = Task {
                 do {
                     for try await message in connection.messages {
                         switch message.metadata.opcode {
                         case .close:
-                            switch message.metadata.closeCode {
-                            case .protocolCode(.policyViolation):
-                                continuation.finish(throwing: NativeConnectionError.authentication)
-                            case .applicationCode(1013), .privateCode(1013),
-                                 .protocolCode(.internalServerError):
-                                continuation.finish(throwing: NativeConnectionError.backendUnavailable)
-                            case .protocolCode(.tlsHandshake):
-                                continuation.finish(throwing: NativeConnectionError.tls)
-                            case .protocolCode(.protocolError), .protocolCode(.unsupportedData):
-                                continuation.finish(throwing: NativeConnectionError.invalidMessage)
-                            case .protocolCode(.messageTooBig):
-                                continuation.finish(throwing: NativeConnectionError.messageTooLarge)
-                            default:
+                            if let error = Self.normalized(message.metadata.closeCode) {
+                                continuation.finish(throwing: error)
+                            } else {
                                 continuation.finish()
                             }
                             return
@@ -94,12 +114,15 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
                 }
             }
             continuation.onTermination = { @Sendable [weak self] _ in
-                Task { @MainActor in self?.cancel() }
+                Task { @MainActor in
+                    guard self?.streamGeneration == generation else { return }
+                    self?.cancel()
+                }
             }
         }
     }
 
-    func send(_ message: NativeClientMessage) async throws {
+    public func send(_ message: NativeClientMessage) async throws {
         guard let connection else { throw NativeConnectionError.transport }
         let data = try JSONEncoder().encode(message)
         guard data.count <= Self.maximumMessageSize,
@@ -114,10 +137,27 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
         }
     }
 
-    func cancel() {
+    public func cancel() {
+        streamGeneration += 1
         receiveTask?.cancel()
         receiveTask = nil
+        streamContinuation?.finish()
+        streamContinuation = nil
         connection = nil
+    }
+
+    @_spi(Testing) public static func normalized(
+        _ closeCode: NWProtocolWebSocket.CloseCode?
+    ) -> NativeConnectionError? {
+        switch closeCode {
+        case .protocolCode(.policyViolation): .authentication
+        case .applicationCode(1013), .privateCode(1013),
+             .protocolCode(.internalServerError): .backendUnavailable
+        case .protocolCode(.tlsHandshake): .tls
+        case .protocolCode(.protocolError), .protocolCode(.unsupportedData): .invalidMessage
+        case .protocolCode(.messageTooBig): .messageTooLarge
+        default: nil
+        }
     }
 
     private static func normalized(_ error: Error) -> NativeConnectionError {

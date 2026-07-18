@@ -29,9 +29,11 @@ open ios/HerdrMobile/HerdrMobile.xcodeproj
 
 在 Xcode 中选择自己的开发团队和 iOS 26 iPhone 后运行 `HerdrMobile` target。项目不包含 ATS 例外、自定义证书信任或证书绕过。
 
-顶层状态测试可以在只有 Swift 6.2+ 命令行工具的环境运行：
+顶层状态及聚焦集成检查可以在只有 Swift 6.2+ 命令行工具的环境运行：
 
 ```bash
 cd ios/HerdrMobile
 swift run HerdrMobileCoreTests
 ```
+
+候选版本的完整自动化命令、Safari PWA smoke 步骤、目标 iPhone 验收清单及发布阻断规则见 [`../../docs/release/ios-0.1.0-rc.1.md`](../../docs/release/ios-0.1.0-rc.1.md)。命令行检查不能替代完整 Xcode 26 和目标 iPhone 验收。

@@ -1,4 +1,6 @@
 import Foundation
+import Network
+import Security
 @_spi(Testing) import HerdrMobileCore
 
 private struct TestFailure: Error, CustomStringConvertible {
@@ -28,6 +30,11 @@ struct AppModelTests {
         try await authenticationRejectionGetsOnlyOneSilentRecovery()
         try await betterNetworkPathReplacesConnectionWithoutResendingCommand()
         try await nonRetryableAndBackendFailuresAreActionable()
+        try await diagnosticsExcludeCredentialsAndTerminalContent()
+        try await transientAppStateNeverCrossesPersistenceSeams()
+        try await nativeHTTPClientUsesEphemeralBearerRequests()
+        try keychainStoreUsesPasscodeBoundDeviceOnlyItemsAndDeletesLocally()
+        try await nativeWebSocketPolicyCoversHandshakeCloseAndCancellation()
         try await logoutClearsLocalAccessWhenRevocationFails()
         try await serverReplacementRequiresConfirmation()
         try await livePaneSnapshotsDriveVisibleNavigationState()
@@ -46,7 +53,7 @@ struct AppModelTests {
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 32 passed")
+        print("HerdrMobileCoreTests: 37 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -317,6 +324,159 @@ struct AppModelTests {
         try check(backendModel.state.connection == .backendUnavailable, "backend failure should be distinct from transport loss")
         backendModel.retryNow()
         try check(backendLive.openCount == 2, "backend failure should offer a safe explicit refresh")
+    }
+
+    static func diagnosticsExcludeCredentialsAndTerminalContent() async throws {
+        let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1,
+            text: "terminal-secret-marker"
+        ))
+        live.emit(.error("server-secret-marker"))
+        await settle()
+
+        let rendered = String(reflecting: model.diagnostics)
+        try check(!rendered.contains("terminal-secret-marker"), "diagnostics must exclude terminal content")
+        try check(!rendered.contains("server-secret-marker"), "diagnostics must sanitize server-provided errors")
+        try check(!rendered.contains("bootstrap"), "diagnostics must exclude bootstrap credentials")
+        try check(!rendered.contains("short-lived"), "diagnostics must exclude native session credentials")
+        try check(model.diagnostics.origin == "https://mac.example", "diagnostics may include the normalized origin")
+        try check(model.diagnostics.serverEpoch == "epoch-1", "diagnostics may include protocol identity")
+    }
+
+    static func transientAppStateNeverCrossesPersistenceSeams() async throws {
+        let sessions = FakeSessions()
+        let credentials = MemoryCredentials()
+        let configuration = MemoryConfiguration()
+        let live = FakeLiveConnection()
+        let model = AppModel(
+            sessions: sessions,
+            credentials: credentials,
+            configuration: configuration,
+            liveConnection: live,
+            identifier: IdentifierSequence(["subscription-1"]).next
+        )
+        await model.submitSetup(origin: "https://mac.example", token: "bootstrap-secret")
+        let pane = AgentPane(
+            paneID: "w1:p1", paneRef: "term-1", title: "Agent",
+            status: "working", cwd: "/repo", workspaceID: "w1"
+        )
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [pane]))
+        await settle()
+        await model.openPane(pane)
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1,
+            text: "terminal-persistence-marker"
+        ))
+        model.updateReplyDraft("draft-persistence-marker")
+        await settle()
+
+        try check(configuration.origin == "https://mac.example", "preferences should persist only the normalized origin")
+        let persistedCredentials = credentials.values
+        try check(persistedCredentials == ["https://mac.example": "bootstrap-secret"], "Keychain should persist only the bootstrap token keyed by origin")
+        let persistedDescription = String(reflecting: (configuration.origin, persistedCredentials))
+        try check(!persistedDescription.contains("short-lived"), "short-lived sessions must remain memory-only")
+        try check(!persistedDescription.contains("terminal-persistence-marker"), "terminal content must remain memory-only")
+        try check(!persistedDescription.contains("draft-persistence-marker"), "reply drafts must remain memory-only")
+        try check(!persistedDescription.contains("epoch-1"), "diagnostic and protocol identity must remain memory-only")
+    }
+
+    static func nativeHTTPClientUsesEphemeralBearerRequests() async throws {
+        var requests: [URLRequest] = []
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            let status = request.httpMethod == "DELETE" ? 204 : 200
+            let body = status == 200
+                ? Data("{\"token\":\"native-session\",\"expires_in\":60}".utf8)
+                : Data()
+            return (status, ["Content-Type": "application/json"], body)
+        }
+        defer { StubURLProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        let client = NativeSessionHTTPClient(
+            session: URLSession(configuration: configuration),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        )
+
+        let session = try await client.exchange(
+            origin: "https://mac.example",
+            bootstrapToken: "bootstrap-secret"
+        )
+        try await client.revoke(
+            origin: "https://mac.example",
+            sessionToken: session.token
+        )
+
+        try check(requests.count == 2, "exchange and revocation should each perform one request")
+        try check(requests[0].url?.absoluteString == "https://mac.example/api/native/session", "exchange should use the fixed native endpoint")
+        try check(requests[0].httpMethod == "POST", "exchange should use POST")
+        try check(requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer bootstrap-secret", "bootstrap token should use only the bearer header")
+        try check(requests[0].value(forHTTPHeaderField: "Cookie") == nil, "native exchange must not present browser cookies")
+        try check(requests[0].cachePolicy == .reloadIgnoringLocalAndRemoteCacheData, "credential exchange must bypass caches")
+        try check(requests[1].httpMethod == "DELETE", "revocation should use DELETE")
+        try check(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer native-session", "revocation should use only the short-lived bearer")
+        try check(session.expiresAt == Date(timeIntervalSince1970: 1_060), "expiry should derive from the validated response lifetime")
+    }
+
+    static func keychainStoreUsesPasscodeBoundDeviceOnlyItemsAndDeletesLocally() throws {
+        let items = FakeKeychainItems()
+        let store = KeychainCredentialStore(items: items)
+        let origin = "https://mac.example:8443"
+
+        try store.saveToken("bootstrap-secret", for: origin)
+
+        let added = try items.addedItem.unwrap("a new token should add one Keychain item")
+        try check(
+            (added[kSecAttrAccessible as String] as? String)
+                == (kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly as String),
+            "Keychain item must require a passcode and remain device-only"
+        )
+        try check((added[kSecAttrSynchronizable as String] as? Bool) == false, "Keychain item must never synchronize")
+        try check((added[kSecAttrServer as String] as? String) == "mac.example", "Keychain item should be scoped to the normalized host")
+        try check((added[kSecAttrPort as String] as? Int) == 8443, "Keychain item should preserve a non-default HTTPS port")
+
+        items.copyResult = (errSecSuccess, Data("bootstrap-secret".utf8))
+        try check(try store.loadToken(for: origin) == "bootstrap-secret", "saved credentials should be readable through the store")
+        try store.deleteToken(for: origin)
+        try check(items.deletedQueries.count == 1, "local logout should issue one Keychain deletion")
+        try check(items.deletedQueries[0][kSecValueData as String] == nil, "deletion query must not carry or expose credential bytes")
+    }
+
+    static func nativeWebSocketPolicyCoversHandshakeCloseAndCancellation() async throws {
+        guard #available(macOS 26.0, *) else { return }
+        let handshake = try NetworkWebSocketConnection.handshake(
+            origin: "https://mac.example:8443",
+            sessionToken: "native-session-secret"
+        )
+
+        try check(handshake.url.absoluteString == "wss://mac.example:8443/ws", "WebSocket should use the fixed WSS endpoint")
+        try check(!handshake.url.absoluteString.contains("native-session-secret"), "session credentials must never enter the URL")
+        try check(handshake.authorizationHeader == "Bearer native-session-secret", "native WebSocket authentication should use the handshake header")
+        try check(handshake.autoReplyPing, "Network WebSocket should automatically answer ping frames")
+        try check(handshake.maximumMessageSize == 8 * 1024, "Network WebSocket should enforce the 8 KiB message limit")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.policyViolation)) == .authentication, "policy close should request authentication recovery")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.internalServerError)) == .backendUnavailable, "backend close should remain actionable")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.tlsHandshake)) == .tls, "TLS close must offer no bypass")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.protocolError)) == .invalidMessage, "protocol close should stop compatibility retries")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.messageTooBig)) == .messageTooLarge, "oversized close should preserve the size failure")
+        try check(NetworkWebSocketConnection.normalized(.protocolCode(.normalClosure)) == nil, "normal close should not invent a terminal failure")
+
+        let connection = NetworkWebSocketConnection()
+        let messages = connection.open(
+            origin: "https://127.0.0.1:1",
+            sessionToken: "synthetic-test-session"
+        )
+        connection.cancel()
+        var iterator = messages.makeAsyncIterator()
+        let messageAfterCancellation = try await iterator.next()
+        try check(messageAfterCancellation == nil, "cancellation should terminate the public message stream")
     }
 
     static func logoutClearsLocalAccessWhenRevocationFails() async throws {
@@ -823,6 +983,61 @@ struct AppModelTests {
         try check(model.state.screen == .setup, "confirmed replacement should return to setup")
         try check(configuration.origin == nil, "confirmed replacement should clear prior server")
     }
+}
+
+private extension Optional {
+    func unwrap(_ message: String) throws -> Wrapped {
+        guard let self else { throw TestFailure(description: message) }
+        return self
+    }
+}
+
+@MainActor
+private final class FakeKeychainItems: KeychainItemAccessing {
+    var copyResult: (OSStatus, Data?) = (errSecItemNotFound, nil)
+    var updateStatus: OSStatus = errSecItemNotFound
+    var addStatus: OSStatus = errSecSuccess
+    var deleteStatus: OSStatus = errSecSuccess
+    var addedItem: [String: Any]?
+    var deletedQueries: [[String: Any]] = []
+
+    func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?) { copyResult }
+    func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus { updateStatus }
+    func add(_ item: [String: Any]) -> OSStatus {
+        addedItem = item
+        return addStatus
+    }
+    func delete(_ query: [String: Any]) -> OSStatus {
+        deletedQueries.append(query)
+        return deleteStatus
+    }
+}
+
+private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, [String: String], Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw TestFailure(description: "missing URLProtocol handler")
+            }
+            let (status, headers, data) = try handler(request)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: status,
+                httpVersion: "HTTP/1.1", headerFields: headers
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if !data.isEmpty { client?.urlProtocol(self, didLoad: data) }
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 @MainActor

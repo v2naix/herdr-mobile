@@ -172,19 +172,19 @@ private struct ConfiguredView: View {
         .sheet(isPresented: $isDiagnosticsPresented) {
             NavigationStack {
                 List {
-                    LabeledContent("服务器", value: model.state.origin)
+                    LabeledContent("服务器", value: model.diagnostics.origin)
                     LabeledContent("状态", value: connectionLabel)
-                    LabeledContent("重试次数", value: String(model.state.retryCount))
-                    if let date = model.state.lastSynchronization {
+                    LabeledContent("重试次数", value: String(model.diagnostics.retryCount))
+                    if let date = model.diagnostics.lastSynchronization {
                         LabeledContent("上次同步", value: date.formatted())
                     }
-                    if let epoch = model.state.serverEpoch {
+                    if let epoch = model.diagnostics.serverEpoch {
                         LabeledContent("服务端 epoch", value: epoch)
                     }
-                    if let version = model.state.protocolVersion {
+                    if let version = model.diagnostics.protocolVersion {
                         LabeledContent("协议版本", value: String(version))
                     }
-                    if let error = model.state.error {
+                    if let error = model.diagnostics.sanitizedError {
                         LabeledContent("最近错误", value: error)
                     }
                 }

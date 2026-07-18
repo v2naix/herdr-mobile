@@ -53,7 +53,38 @@ class AppTests(unittest.TestCase):
         self.assertEqual(set(response.json()), {"token", "expires_in"})
         self.assertGreaterEqual(response.json()["expires_in"], 1)
         self.assertNotIn("set-cookie", response.headers)
+        self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertNotEqual(response.json()["token"], "test-token")
+
+    def test_native_credentials_and_terminal_content_never_enter_logs(self):
+        native_token = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        with self.assertLogs("herdr_mobile", level="INFO") as captured:
+            with self.client.websocket_connect(
+                "/ws", headers={"Authorization": f"Bearer {native_token}"}
+            ) as websocket:
+                hello = websocket.receive_json()
+                self.assertEqual(hello["type"], "hello")
+                pane_snapshot = websocket.receive_json()
+                pane = pane_snapshot["panes"][0]
+                websocket.send_json({
+                    "type": "subscribe",
+                    "subscription_id": "subscription-log-check",
+                    "pane_id": pane["pane_id"],
+                    "pane_ref": pane["pane_ref"],
+                    "lines": 120,
+                })
+                output = websocket.receive_json()
+                self.assertIn("<script>alert(1)</script>", output["text"])
+
+        logs = "\n".join(captured.output)
+        self.assertNotIn("test-token", logs)
+        self.assertNotIn(native_token, logs)
+        self.assertNotIn("<script>alert(1)</script>", logs)
+        self.assertNotIn("subscription-log-check", logs)
 
     def test_native_session_rejects_missing_or_invalid_bootstrap_token(self):
         self.assertEqual(self.client.post("/api/native/session").status_code, 401)

@@ -148,6 +148,34 @@ public struct AppViewState: Equatable, Sendable {
     }
 }
 
+public struct AppDiagnostics: Equatable, Sendable {
+    public let origin: String
+    public let connection: NativeConnectionState
+    public let lastSynchronization: Date?
+    public let retryCount: Int
+    public let serverEpoch: String?
+    public let protocolVersion: Int?
+    public let sanitizedError: String?
+
+    public init(
+        origin: String,
+        connection: NativeConnectionState,
+        lastSynchronization: Date?,
+        retryCount: Int,
+        serverEpoch: String?,
+        protocolVersion: Int?,
+        sanitizedError: String?
+    ) {
+        self.origin = origin
+        self.connection = connection
+        self.lastSynchronization = lastSynchronization
+        self.retryCount = retryCount
+        self.serverEpoch = serverEpoch
+        self.protocolVersion = protocolVersion
+        self.sanitizedError = sanitizedError
+    }
+}
+
 public enum DestructiveAction: Equatable, Sendable {
     case replaceServer
     case logout
@@ -308,6 +336,18 @@ public final class AppModel: ObservableObject {
                 )
             }
         }
+    }
+
+    public var diagnostics: AppDiagnostics {
+        AppDiagnostics(
+            origin: state.origin,
+            connection: state.connection,
+            lastSynchronization: state.lastSynchronization,
+            retryCount: state.retryCount,
+            serverEpoch: state.serverEpoch,
+            protocolVersion: state.protocolVersion,
+            sanitizedError: state.error
+        )
     }
 
     public func setSceneActive(_ active: Bool) {

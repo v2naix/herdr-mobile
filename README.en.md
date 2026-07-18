@@ -20,7 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - Provides fixed `approve once / deny` actions verified against MacGuard's `ctx.ui.confirm`. The UI does not show `always allow`, and the server rejects that action.
 - Automatically reconnects WebSockets after transient network failures. Authentication or Origin rejection (`1008`) stops reconnection and returns to the login screen, preventing invalid request loops. Includes a dark iPhone UI, manifest, and service worker for installation on the iPhone Home Screen. Logging out immediately revokes the current in-memory session.
 - Provides `GET /healthz`, strict Origin and CSP enforcement, an 8 KiB WebSocket message limit, and connection and rate limits.
-- `ios/HerdrMobile/` contains the production iOS 26 SwiftUI client: one HTTPS Mac configuration, separate native bearer-session validation, passcode-bound Keychain storage for the bootstrap token, and agent-pane browsing; detail supports bottom-following output, frozen history reading, horizontally scrollable original width, and fixed response operations that await acknowledgement, retain failed drafts, and never resend automatically.
+- `ios/HerdrMobile/` contains the production iOS 26 SwiftUI client: one HTTPS Mac configuration, separate native bearer-session validation, passcode-bound Keychain storage for the bootstrap token, and agent-pane browsing; detail supports bottom-following output, frozen history reading, horizontally scrollable original width, and fixed response operations that await acknowledgement, retain failed drafts, and never resend automatically. It connects only in the foreground and restores subscriptions only after authoritative identity synchronization. The PWA remains available as the fallback throughout native acceptance and later use.
 - Structured event logs do not record terminal input or output content. Uvicorn access logging is disabled by default.
 - The adapter accepts an injectable fake runner. Tests cover pane identity validation, input boundaries, authentication, and the XSS rendering boundary.
 
@@ -180,9 +180,10 @@ The second authentication layer can be disabled with `HERDR_MOBILE_AUTH=0`, but 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 node --test tests/test_reconnect_policy.js
+(cd ios/HerdrMobile && swift run HerdrMobileCoreTests)
 ```
 
-The test seams are the adapter's public interface, protocol validation functions, and HTTP/WebSocket authentication boundaries. The `<script>` example in test output proves that terminal text is never embedded into server-rendered HTML. At runtime, the frontend uses `textContent`.
+The test seams are the adapter's public interface, protocol validation functions, HTTP/WebSocket authentication boundaries, and the native client's top-level state/action interface. The `<script>` example in test output proves that terminal text enters neither logs nor server-rendered HTML. At runtime, the frontend uses `textContent`. Automated RC evidence, the Safari PWA smoke procedure, target-iPhone checklist, and blocker rules are recorded in [`docs/release/ios-0.1.0-rc.1.md`](docs/release/ios-0.1.0-rc.1.md).
 
 ## Project layout
 
