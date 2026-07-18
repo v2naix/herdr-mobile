@@ -59,13 +59,13 @@ private enum PaneStatus: String, CaseIterable, Hashable {
         }
     }
 
-    // Keep the existing Herdr web status palette and convey status without color alone.
+    // Tuned for the black console: high contrast without neon glare.
     var color: Color {
         switch self {
-        case .blocked: Color(red: 1, green: 177.0 / 255.0, blue: 74.0 / 255.0) // #ffb14a
-        case .done: Color(red: 181.0 / 255.0, green: 140.0 / 255.0, blue: 204.0 / 255.0) // #b58cff
-        case .working: Color(red: 104.0 / 255.0, green: 165.0 / 255.0, blue: 1) // #68a5ff
-        case .idle: Color(red: 122.0 / 255.0, green: 214.0 / 255.0, blue: 160.0 / 255.0) // #7ad6a0
+        case .blocked: Color(red: 1, green: 0.33, blue: 0.40) // warm red
+        case .done: Color(red: 0.22, green: 0.84, blue: 0.54) // vivid green
+        case .working: Color(red: 0.96, green: 0.72, blue: 0.25) // warm yellow
+        case .idle: Color(red: 0.38, green: 0.72, blue: 0.53) // quieter green
         }
     }
 
