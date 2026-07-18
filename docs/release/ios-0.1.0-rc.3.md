@@ -95,7 +95,7 @@ Safari PWA：☑ 通过 ☐ 失败
 - [x] 正常系统 TLS 成功；证书、有效期或主机名错误进入 TLS failure，界面不提供绕过。
 - [x] 正确 bootstrap token 验证后才保存；错误 token 明确要求替换。
 - [ ] 无设备密码时 Keychain 保存失败且不降级；设置设备密码后可成功。（受阻：验收人要求跳过需暂时移除设备密码的真机测试；未验证，不通过验收。）
-- [ ] 重装/备份迁移测试确认 token 使用 `WhenPasscodeSetThisDeviceOnly`，不会同步到其他设备。
+- [ ] 重装/备份迁移测试确认 token 使用 `WhenPasscodeSetThisDeviceOnly`，不会同步到其他设备。（受阻：验收人要求不执行；未验证，不通过验收。）
 - [x] 冷启动只恢复 origin 和 bootstrap token；短期会话、pane、输出、草稿和导航均不从磁盘恢复。
 - [x] 更换服务器必须确认，并清除旧服务器凭据、pane、输出、草稿和导航。
 - [x] 在线与离线退出登录都立即清除本地访问；在线时尽力撤销短期会话。
@@ -128,9 +128,9 @@ Safari PWA：☑ 通过 ☐ 失败
 - [x] 短暂断网按带抖动的有上限退避重连；“立即重试”可用；稳定同步后计数重置。
 - [x] Wi‑Fi → 蜂窝网络和蜂窝网络 → Wi‑Fi 均安全替换连接，不重复命令。
 - [x] 可用路径丢失与恢复、better-path 变化均不会让客户端滞留或附着错误 pane。
-- [ ] 短期会话过期或后端重启后只静默交换一次；再次拒绝进入 authentication required，不循环。
+- [ ] 短期会话过期或后端重启后只静默交换一次；再次拒绝进入 authentication required，不循环。（受阻：验收人要求不执行；未验证，不通过验收。）
 - [x] 普通网络失败不消耗单次认证恢复机会。
-- [ ] TLS 和 incompatible protocol 停止自动重试且无绕过；backend/herdr unavailable 保留旧状态并允许安全刷新。
+- [ ] TLS 和 incompatible protocol 停止自动重试且无绕过；backend/herdr unavailable 保留旧状态并允许安全刷新。（受阻：验收人要求不执行；未验证，不通过验收。）
 - [x] 同一 `pane_id + pane_ref` 在权威快照后恢复订阅。
 - [x] pane 缺失时旧详情保持可见、标记陈旧、操作禁用，不自动返回或替换。
 - [x] pane ID 被不同 `pane_ref` 复用时绝不订阅或执行操作。
@@ -151,7 +151,7 @@ Safari PWA：☑ 通过 ☐ 失败
 ```text
 目标 iPhone 总结：☐ 通过 ☐ 失败 ☐ 受阻
 开始：2026-07-18______________ 结束：________________________
-失败项编号及非敏感说明：Keychain 无设备密码场景受阻且未验证；其余未勾选的目标设备场景尚未完成。Safari PWA 已通过。
+失败项编号及非敏感说明：Keychain 无设备密码、重装/备份迁移、重复认证拒绝，以及 TLS/协议/后端不可用场景均因验收人要求不执行而受阻，未验证且不通过验收。Safari PWA 已通过。
 ```
 
 ## 发布阻断规则
