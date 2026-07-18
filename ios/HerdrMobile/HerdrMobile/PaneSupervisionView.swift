@@ -10,6 +10,8 @@ struct PaneSupervisionView: View {
 
     var body: some View {
         ScrollView(.vertical) {
+            paneHeader
+                .padding([.horizontal, .top])
             output
                 .padding()
             Color.clear
@@ -107,6 +109,33 @@ struct PaneSupervisionView: View {
 #if os(iOS)
         .navigationBarBackButtonHidden(model.state.command?.status == .pending)
 #endif
+    }
+
+    private var paneHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(pane.status.capitalized, systemImage: statusSymbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(pane.title)
+                .font(.headline)
+            if !pane.cwd.isEmpty {
+                Text(pane.cwd)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var statusSymbol: String {
+        switch PaneStatus(agentStatus: pane.status) {
+        case .blocked: "xmark.octagon"
+        case .done: "checkmark.circle"
+        case .working: "clock"
+        case .idle: "pause.circle"
+        case .unknown: "questionmark.circle"
+        }
     }
 
     @ViewBuilder

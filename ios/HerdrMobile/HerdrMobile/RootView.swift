@@ -103,58 +103,63 @@ private struct ConfiguredView: View {
     @State private var isDiagnosticsPresented = false
 
     var body: some View {
-        List {
-            Section {
-                Label(connectionLabel, systemImage: connectionSymbol)
-                    .foregroundStyle(connectionColor)
-                if let error = model.state.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    ForEach(PaneStatus.primaryOrder, id: \.self) { status in
+                        PaneStatusBox(model: model, status: status)
+                    }
                 }
-                if canRetryConnection {
-                    Button("立即重试") { model.retryNow() }
+                .padding()
+
+                HStack(spacing: 8) {
+                    Label(connectionLabel, systemImage: connectionSymbol)
+                        .font(.footnote)
+                        .foregroundStyle(connectionColor)
+                    if let error = model.state.error {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    if canRetryConnection {
+                        Button("立即重试") { model.retryNow() }
+                            .font(.footnote)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+                if let pane = model.state.selectedPane {
+                    PaneSupervisionView(model: model, pane: pane)
+                } else {
+                    ContentUnavailableView(
+                        model.state.panes.isEmpty && model.state.connection == .online
+                            ? "没有 Agent pane"
+                            : "选择一个任务",
+                        systemImage: "rectangle.stack"
+                    )
+                    .foregroundStyle(.secondary)
                 }
             }
-
-            Section("Agent panes") {
-                ForEach(model.state.panes) { pane in
-                    NavigationLink(value: pane) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(pane.title)
-                                    .font(.headline)
-                                Spacer()
-                                Text(pane.status)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if !pane.cwd.isEmpty {
-                                Text(pane.cwd)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            if !pane.workspaceID.isEmpty {
-                                Text("Workspace \(pane.workspaceID)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+        }
+        .preferredColorScheme(.dark)
+        .navigationTitle("Herdr Mobile")
+        .toolbar {
+            if !model.state.panes(in: .unknown).isEmpty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu("未知 pane", systemImage: "questionmark.circle") {
+                        ForEach(model.state.panes(in: .unknown)) { pane in
+                            Button(pane.title) {
+                                Task { await model.openPane(pane) }
                             }
                         }
                     }
                 }
             }
-        }
-        .overlay {
-            if model.state.panes.isEmpty && model.state.connection == .online {
-                ContentUnavailableView("没有 Agent pane", systemImage: "rectangle.stack")
-            }
-        }
-        .navigationTitle("Herdr Mobile")
-        .navigationDestination(for: AgentPane.self) { pane in
-            PaneSupervisionView(model: model, pane: pane)
-        }
-        .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("诊断信息", systemImage: "stethoscope") {
@@ -221,5 +226,44 @@ private struct ConfiguredView: View {
 
     private var connectionColor: Color {
         model.state.connection == .online ? .green : .secondary
+    }
+}
+
+private struct PaneStatusBox: View {
+    @ObservedObject var model: AppModel
+    let status: PaneStatus
+
+    private var panes: [AgentPane] { model.state.panes(in: status) }
+
+    var body: some View {
+        Button {
+            Task { await model.openFirstPane(in: status) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: symbolName)
+                Text(String(panes.count))
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(panes.isEmpty)
+        .contextMenu {
+            ForEach(panes) { pane in
+                Button(pane.title) {
+                    Task { await model.openPane(pane) }
+                }
+            }
+        }
+    }
+
+    private var symbolName: String {
+        switch status {
+        case .blocked: "xmark.octagon"
+        case .done: "checkmark.circle"
+        case .working: "clock"
+        case .idle: "pause.circle"
+        case .unknown: "questionmark.circle"
+        }
     }
 }

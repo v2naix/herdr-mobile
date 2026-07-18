@@ -39,6 +39,8 @@ struct AppModelTests {
         try await confirmedLogoutSurvivesPresentationDismissal()
         try await serverReplacementRequiresConfirmation()
         try await livePaneSnapshotsDriveVisibleNavigationState()
+        try await paneStatusGroupsAreOrderedAndKeepUnknownSeparate()
+        try await paneGroupSelectionUsesExistingIdentitySafeOpenFlow()
         try await incompatibleProtocolStopsTheNativeConnection()
         try await outputFilteringUsesEpochSubscriptionIdentityAndRevision()
         try await scrollingAwayFreezesVisibleOutputDuringBursts()
@@ -54,7 +56,7 @@ struct AppModelTests {
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 38 passed")
+        print("HerdrMobileCoreTests: 40 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -587,6 +589,53 @@ struct AppModelTests {
         try check(model.state.connection == .online, "authoritative snapshot should make the app online")
         try check(model.state.panes.map(\.title) == ["最新标题"], "newest complete pane snapshot should replace older revisions")
         try check(model.state.selectedPane == nil, "connection state must not drive navigation")
+    }
+
+    static func paneStatusGroupsAreOrderedAndKeepUnknownSeparate() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live)
+        let panes = [
+            AgentPane(paneID: "w1:p1", paneRef: "term-1", title: "Unknown", status: "unknown", cwd: "/repo", workspaceID: "w1"),
+            AgentPane(paneID: "w1:p2", paneRef: "term-2", title: "Idle", status: "idle", cwd: "/repo", workspaceID: "w1"),
+            AgentPane(paneID: "w1:p3", paneRef: "term-3", title: "Working", status: "working", cwd: "/repo", workspaceID: "w1"),
+            AgentPane(paneID: "w1:p4", paneRef: "term-4", title: "Done", status: "done", cwd: "/repo", workspaceID: "w1"),
+            AgentPane(paneID: "w1:p5", paneRef: "term-5", title: "Blocked", status: "blocked", cwd: "/repo", workspaceID: "w1"),
+        ]
+
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: panes))
+        await settle()
+
+        try check(PaneStatus.primaryOrder == [.blocked, .done, .working, .idle], "console status boxes must have a stable priority order")
+        try check(model.state.panes(in: .blocked).map(\.title) == ["Blocked"], "blocked panes should stay in their own group")
+        try check(model.state.panes(in: .idle).map(\.title) == ["Idle"], "idle must not absorb unknown panes")
+        try check(model.state.panes(in: .unknown).map(\.title) == ["Unknown"], "unknown panes must remain discoverable")
+    }
+
+    static func paneGroupSelectionUsesExistingIdentitySafeOpenFlow() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live, identifiers: ["subscription-1", "subscription-2"])
+        let blocked = AgentPane(paneID: "w1:p1", paneRef: "term-1", title: "First blocked", status: "blocked", cwd: "/repo", workspaceID: "w1")
+        let secondBlocked = AgentPane(paneID: "w1:p2", paneRef: "term-2", title: "Second blocked", status: "blocked", cwd: "/repo", workspaceID: "w1")
+
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [blocked, secondBlocked]))
+        await settle()
+
+        await model.openFirstPane(in: .blocked)
+        try check(model.state.selectedPane == blocked, "tapping a status box should open its snapshot-first pane")
+        try check(live.sent.last == .subscribe(subscriptionID: "subscription-1", paneID: blocked.paneID, paneRef: blocked.paneRef, lines: 120), "status-box selection must retain the existing identity-safe subscription")
+
+        await model.openPane(secondBlocked)
+        try check(model.state.selectedPane == secondBlocked, "the status-box menu should open its chosen pane")
+        try check(live.sent.last == .subscribe(subscriptionID: "subscription-2", paneID: secondBlocked.paneID, paneRef: secondBlocked.paneRef, lines: 120), "menu selection must retain the existing identity-safe subscription")
+
+        model.closePane()
+        await model.openFirstPane(in: .done)
+        try check(model.state.selectedPane == nil, "an empty status box must not fabricate a selection")
+        try check(live.sent.count == 2, "an empty status box must not subscribe")
     }
 
     static func incompatibleProtocolStopsTheNativeConnection() async throws {

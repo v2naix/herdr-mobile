@@ -23,6 +23,20 @@ public enum ReaderMode: Equatable, Sendable {
     case readingHistory
 }
 
+public enum PaneStatus: String, Equatable, Sendable {
+    case blocked
+    case done
+    case working
+    case idle
+    case unknown
+
+    public static let primaryOrder: [PaneStatus] = [.blocked, .done, .working, .idle]
+
+    public init(agentStatus: String) {
+        self = PaneStatus(rawValue: agentStatus) ?? .unknown
+    }
+}
+
 public enum ReaderWidthMode: Equatable, Sendable {
     case wrapped
     case original
@@ -96,6 +110,10 @@ public struct AppViewState: Equatable, Sendable {
     public var lastSynchronization: Date?
     public var serverEpoch: String?
     public var protocolVersion: Int?
+
+    public func panes(in status: PaneStatus) -> [AgentPane] {
+        panes.filter { PaneStatus(agentStatus: $0.status) == status }
+    }
 
     public init(
         screen: AppScreen = .setup,
@@ -535,6 +553,11 @@ public final class AppModel: ObservableObject {
             state.error = "无法订阅 pane 输出。请检查网络后重试。"
             handleConnectionEnd(error: error)
         }
+    }
+
+    public func openFirstPane(in status: PaneStatus, lines: Int = 120) async {
+        guard let pane = state.panes(in: status).first else { return }
+        await openPane(pane, lines: lines)
     }
 
     public func closePane() {
