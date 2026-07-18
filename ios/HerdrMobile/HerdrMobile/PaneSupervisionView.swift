@@ -9,134 +9,150 @@ struct PaneSupervisionView: View {
     @State private var isUserScrolling = false
 
     var body: some View {
-        ScrollView(.vertical) {
-            paneHeader
-                .padding([.horizontal, .top])
-            output
-                .padding()
-            Color.clear
-                .frame(height: 1)
-                .id("output-bottom")
-        }
-        .scrollPosition($scrollPosition)
-        .background(Color.black.opacity(0.92))
-        .foregroundStyle(.white)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
-            let contentBottom = geometry.contentSize.height + geometry.contentInsets.bottom
-            return contentBottom - visibleBottom < 28
-        } action: { _, nearBottom in
-            isNearBottom = nearBottom
-            if isUserScrolling && !nearBottom {
-                model.userScrolledAwayFromBottom()
-            }
-        }
-        .onScrollPhaseChange { _, phase in
-            isUserScrolling = phase == .interacting || phase == .decelerating
-            if phase == .interacting && !isNearBottom {
-                model.userScrolledAwayFromBottom()
-            } else if phase == .idle,
-                      isNearBottom,
-                      model.state.readerMode == .readingHistory {
-                returnToBottom()
-            }
-        }
-        .onChange(of: model.state.outputText) {
-            if model.state.readerMode == .following {
-                scrollPosition.scrollTo(edge: .bottom)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if model.state.readerMode == .readingHistory {
-                Button(action: returnToBottom) {
+        readerCard
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if model.state.selectedPaneIsStale || model.state.connection != .online {
                     Label(
-                        model.state.hasPendingOutput ? "有新输出 · 返回底部" : "返回底部",
-                        systemImage: "arrow.down.to.line"
+                        model.state.selectedPaneIsStale
+                            ? "此 pane 信息尚未重新验证，内容为旧快照，操作已禁用。"
+                            : "控制连接尚未同步，Agent 可能仍在运行。",
+                        systemImage: "exclamationmark.triangle"
                     )
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(.bar)
                 }
-                .buttonStyle(.borderedProminent)
-                .padding()
-                .accessibilityIdentifier("return-to-bottom")
             }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if model.state.selectedPaneIsStale || model.state.connection != .online {
-                Label(
-                    model.state.selectedPaneIsStale
-                        ? "此 pane 信息尚未重新验证，内容为旧快照，操作已禁用。"
-                        : "控制连接尚未同步，Agent 可能仍在运行。",
-                    systemImage: "exclamationmark.triangle"
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                commandDeck
+            }
+            .sensoryFeedback(.impact(weight: .light), trigger: model.state.successFeedbackCount)
+            .sensoryFeedback(.warning, trigger: model.state.warningFeedbackCount)
+            .sheet(
+                isPresented: Binding(
+                    get: { model.state.isReplyEditorPresented },
+                    set: { if !$0 { model.dismissReplyEditor() } }
                 )
-                .font(.footnote)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(.bar)
+            ) {
+                ReplyEditor(model: model)
+                    .presentationDetents([.height(260)])
+                    .presentationDragIndicator(.visible)
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            commandDeck
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.setReaderWidth(model.state.readerWidth == .wrapped ? .original : .wrapped)
-                } label: {
-                    Label(
-                        model.state.readerWidth == .wrapped ? "原始宽度" : "自动换行",
-                        systemImage: model.state.readerWidth == .wrapped ? "arrow.left.and.right" : "text.word.spacing"
-                    )
-                }
+            .task(id: pane.id) {
+                await model.openPane(pane)
             }
-        }
-        .sensoryFeedback(.impact(weight: .light), trigger: model.state.successFeedbackCount)
-        .sensoryFeedback(.warning, trigger: model.state.warningFeedbackCount)
-        .sheet(
-            isPresented: Binding(
-                get: { model.state.isReplyEditorPresented },
-                set: { if !$0 { model.dismissReplyEditor() } }
-            )
-        ) {
-            ReplyEditor(model: model, paneTitle: pane.title)
-                .presentationDetents([.large])
-        }
-        .task(id: pane.id) {
-            await model.openPane(pane)
-        }
-        .onDisappear {
-            model.closePane()
-        }
-        .navigationTitle(pane.title)
+            .onDisappear {
+                model.closePane()
+            }
 #if os(iOS)
-        .navigationBarBackButtonHidden(model.state.command?.status == .pending)
+            .navigationBarBackButtonHidden(model.state.command?.status == .pending)
 #endif
     }
 
-    private var paneHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(pane.status.capitalized, systemImage: statusSymbol)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(pane.title)
-                .font(.headline)
-            if !pane.cwd.isEmpty {
-                Text(pane.cwd)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    private var readerCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            paneHeader
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+            Divider().overlay(.white.opacity(0.15))
+            ScrollView(.vertical) {
+                output
+                    .padding(16)
+                Color.clear
+                    .frame(height: 1)
+                    .id("output-bottom")
+            }
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                let contentBottom = geometry.contentSize.height + geometry.contentInsets.bottom
+                return contentBottom - visibleBottom < 28
+            } action: { _, nearBottom in
+                isNearBottom = nearBottom
+                if isUserScrolling && !nearBottom {
+                    model.userScrolledAwayFromBottom()
+                }
+            }
+            .onScrollPhaseChange { _, phase in
+                isUserScrolling = phase == .interacting || phase == .decelerating
+                if phase == .interacting && !isNearBottom {
+                    model.userScrolledAwayFromBottom()
+                } else if phase == .idle,
+                          isNearBottom,
+                          model.state.readerMode == .readingHistory {
+                    returnToBottom()
+                }
+            }
+            .onChange(of: model.state.outputText) {
+                if model.state.readerMode == .following {
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+            }
+            .onChange(of: model.state.readerMode) {
+                if model.state.readerMode == .following {
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.04, green: 0.07, blue: 0.06), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(alignment: .bottomTrailing) {
+            if model.state.readerMode == .readingHistory {
+                Button(action: returnToBottom) {
+                    Image(systemName: "arrow.down.to.line")
+                        .frame(minWidth: 54, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white.opacity(0.45))
+                .padding()
+                .accessibilityLabel(
+                    model.state.hasPendingOutput ? "有新输出，返回底部" : "返回底部"
+                )
+                .accessibilityIdentifier("return-to-bottom")
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var paneHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: statusSymbol)
+                .foregroundStyle(statusColor)
+            Text(pane.title)
+                .font(.headline.monospaced())
+                .lineLimit(1)
+            Spacer()
+            Button {
+                model.setReaderWidth(model.state.readerWidth == .wrapped ? .original : .wrapped)
+            } label: {
+                Image(systemName: model.state.readerWidth == .wrapped
+                    ? "arrow.left.and.right"
+                    : "text.word.spacing")
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel(model.state.readerWidth == .wrapped ? "原始宽度" : "自动换行")
+        }
         .accessibilityLabel("当前 pane：\(pane.status)，\(pane.title)\(pane.cwd.isEmpty ? "" : "，\(pane.cwd)")")
         .accessibilityIdentifier("current-pane-title")
     }
 
     private var statusSymbol: String {
         switch PaneStatus(agentStatus: pane.status) {
-        case .blocked: "xmark.octagon"
-        case .done: "checkmark.circle"
-        case .working: "clock"
-        case .idle: "pause.circle"
-        case .unknown: "questionmark.circle"
+        case .blocked: "exclamationmark.circle.fill"
+        case .done: "checkmark.circle.fill"
+        case .working: "arrow.triangle.2.circlepath.circle.fill"
+        case .idle: "pause.circle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch PaneStatus(agentStatus: pane.status) {
+        case .blocked: Color(red: 1, green: 0.33, blue: 0.40)
+        case .done: Color(red: 0.22, green: 0.84, blue: 0.54)
+        case .working: Color(red: 0.96, green: 0.72, blue: 0.25)
+        case .idle: Color(red: 0.38, green: 0.72, blue: 0.53)
+        case .unknown: .gray
         }
     }
 
@@ -145,13 +161,15 @@ struct PaneSupervisionView: View {
         let text = model.state.outputText.isEmpty ? "正在等待输出…" : model.state.outputText
         if model.state.readerWidth == .wrapped {
             Text(text)
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(Color(red: 0.76, green: 0.94, blue: 0.84))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             ScrollView(.horizontal) {
                 Text(text)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.76, green: 0.94, blue: 0.84))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,61 +179,60 @@ struct PaneSupervisionView: View {
 
     private var commandDeck: some View {
         VStack(spacing: 8) {
-            Group {
-                if let command = model.state.command {
-                    commandStatus(command)
-                } else {
-                    Color.clear
-                }
+            if let command = model.state.command {
+                commandStatus(command)
+                    .padding(.horizontal, 12)
             }
-            .frame(height: 40)
-            .padding(.horizontal)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
+                commandKey("Ctrl+C", command: .controlC, tint: .red)
+                commandKey("↑", command: .up, tint: .gray)
+                commandKey("↓", command: .down, tint: .gray)
+                commandKey("y", command: .yes, tint: .green)
+                commandKey("n", command: .no, tint: .red)
+                commandKey("Tab", command: .tab, tint: .gray)
+                Spacer(minLength: 0)
                 Button("回复") { model.presentReplyEditor() }
                     .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
                     .disabled(!canSendCommand)
                     .accessibilityIdentifier("reply")
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+
+            HStack(spacing: 7) {
+                commandKey("Esc", command: .escape, tint: .orange)
                 commandButton("批准", command: .allowOnce)
+                    .buttonStyle(.borderedProminent)
                     .tint(.green)
                     .accessibilityIdentifier("approve")
                 commandButton("拒绝", command: .deny, role: .destructive)
+                    .buttonStyle(.borderedProminent)
                     .tint(.red)
                     .accessibilityIdentifier("deny")
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal)
-
-            HStack(spacing: 8) {
-                commandButton("Enter", command: .enter)
-                    .tint(.green)
-                commandButton("Esc", command: .escape)
-                    .tint(.red)
-                commandButton("y", command: .yes)
-                    .tint(.green)
-                commandButton("n", command: .no)
-                    .tint(.red)
                 Menu {
-                    commandButton("Tab", command: .tab)
-                    commandButton("↑", command: .up)
-                    commandButton("↓", command: .down)
                     commandButton("←", command: .left)
                     commandButton("→", command: .right)
                     Divider()
-                    commandButton("Ctrl+C", command: .controlC)
                     commandButton("Ctrl+L", command: .controlL)
                     commandButton("Ctrl+P", command: .controlP)
                     commandButton("Ctrl+O", command: .controlO)
                 } label: {
-                    Label("更多", systemImage: "ellipsis.circle")
+                    Label("更多", systemImage: "keyboard")
                 }
+                .buttonStyle(.bordered)
+                .tint(.gray)
                 .disabled(!canSendCommand)
                 .accessibilityIdentifier("more-commands")
+                commandKey("/", command: .slash, tint: .gray)
+                commandKey("Enter", command: .enter, tint: .blue)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal)
+            .controlSize(.small)
+            .padding(.horizontal, 12)
         }
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
         .background(.bar)
     }
 
@@ -253,6 +270,12 @@ struct PaneSupervisionView: View {
         .accessibilityIdentifier("command-status")
     }
 
+    private func commandKey(_ title: String, command: QuickCommand, tint: Color) -> some View {
+        commandButton(title, command: command)
+            .buttonStyle(.bordered)
+            .tint(tint)
+    }
+
     private func commandButton(
         _ title: String,
         command: QuickCommand,
@@ -279,69 +302,78 @@ struct PaneSupervisionView: View {
 
 private struct ReplyEditor: View {
     @ObservedObject var model: AppModel
-    let paneTitle: String
+    @FocusState private var isEditorFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 8) {
-                TextEditor(text: Binding(
-                    get: { model.state.replyDraft },
-                    set: { model.updateReplyDraft($0) }
-                ))
-                .font(.body)
-                .disabled(replyIsLocked)
+        VStack(alignment: .leading, spacing: 10) {
+            TextEditor(text: Binding(
+                get: { model.state.replyDraft },
+                set: { model.updateReplyDraft($0) }
+            ))
+            .font(.body)
+            .focused($isEditorFocused)
+            .disabled(replyIsLocked)
+            .frame(minHeight: 118)
+            .padding(10)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
 
-                if let error = model.state.replyError {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                } else if let command = model.state.command {
-                    switch command.status {
-                    case .pending:
-                        HStack {
-                            ProgressView()
-                            Text(command.message ?? "等待服务器确认…")
-                        }
-                        .font(.footnote)
-                    case .failed:
-                        Text("命令失败，草稿已保留。")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    case .outcomeUnknown:
-                        HStack {
-                            Text(command.message ?? "结果未知，草稿已保留。")
-                            Spacer()
-                            Button("明确重试") {
-                                Task { await model.retryCommand() }
-                            }
-                            .disabled(model.state.connection != .online || model.state.selectedPaneIsStale)
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                    case .acknowledged:
-                        EmptyView()
-                    }
+            commandFeedback
+
+            HStack {
+                Button("关闭") { model.dismissReplyEditor() }
+                Spacer()
+                Button("发送") {
+                    Task { await model.sendReply() }
                 }
-            }
-            .padding()
-            .navigationTitle("回复 \(paneTitle)")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { model.dismissReplyEditor() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("发送") {
-                        Task { await model.sendReply() }
-                    }
-                    .disabled(
-                        model.state.connection != .online
-                        || model.state.selectedPaneIsStale
-                        || model.state.command?.status == .pending
-                        || model.state.command?.status == .outcomeUnknown
-                    )
-                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSendReply)
             }
         }
+        .padding(16)
+        .task {
+            isEditorFocused = true
+        }
+    }
+
+    @ViewBuilder
+    private var commandFeedback: some View {
+        if let error = model.state.replyError {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        } else if let command = model.state.command {
+            switch command.status {
+            case .pending:
+                HStack {
+                    ProgressView()
+                    Text(command.message ?? "等待服务器确认…")
+                }
+                .font(.footnote)
+            case .failed:
+                Text("命令失败，草稿已保留。")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            case .outcomeUnknown:
+                HStack {
+                    Text(command.message ?? "结果未知，草稿已保留。")
+                    Spacer()
+                    Button("明确重试") {
+                        Task { await model.retryCommand() }
+                    }
+                    .disabled(model.state.connection != .online || model.state.selectedPaneIsStale)
+                }
+                .font(.footnote)
+                .foregroundStyle(.orange)
+            case .acknowledged:
+                EmptyView()
+            }
+        }
+    }
+
+    private var canSendReply: Bool {
+        model.state.connection == .online
+            && !model.state.selectedPaneIsStale
+            && !replyIsLocked
     }
 
     private var replyIsLocked: Bool {

@@ -45,6 +45,7 @@ struct AppModelTests {
         try await outputFilteringUsesEpochSubscriptionIdentityAndRevision()
         try await scrollingAwayFreezesVisibleOutputDuringBursts()
         try await returningToBottomAppliesOnlyNewestPendingSnapshot()
+        try await quickCommandsResumeFollowingOutput()
         try await widthModeIsIndependentAndResetsAfterLeavingPane()
         try await replyEditorPresentationPreservesReaderContext()
         try await acknowledgedReplyClearsDraftOnlyAfterServerResult()
@@ -52,11 +53,12 @@ struct AppModelTests {
         try await failedReplyRetainsDraftEditorAndReaderPosition()
         try await onePendingCommandGatesCompetingQuickActions()
         try await boundedQuickActionsMapToFixedProtocolOperations()
+        try await slashQuickActionSendsSlashText()
         try await disconnectMarksPendingCommandUnknownWithoutResend()
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 40 passed")
+        print("HerdrMobileCoreTests: 42 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -751,6 +753,29 @@ struct AppModelTests {
         try check(model.state.outputText == "newest pending", "repeated bottom return must not reapply discarded snapshots")
     }
 
+    static func quickCommandsResumeFollowingOutput() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1"]
+        )
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1, text: "visible"
+        ))
+        await settle()
+        model.userScrolledAwayFromBottom()
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 2, text: "command menu"
+        ))
+        await settle()
+
+        await model.sendQuickCommand(.slash)
+
+        try check(model.state.readerMode == .following, "a quick command should resume live output")
+        try check(model.state.outputText == "command menu", "resuming should reveal pending output immediately")
+        try check(!model.state.hasPendingOutput, "resuming should clear the new-output indicator")
+    }
+
     static func widthModeIsIndependentAndResetsAfterLeavingPane() async throws {
         let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
         live.emit(.outputSnapshot(
@@ -924,6 +949,19 @@ struct AppModelTests {
             .sendKeys(commandID: "command-15", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Ctrl+o"]),
         ]
         try check(Array(live.sent.dropFirst()) == expected, "only fixed allowlisted quick operations should be expressible")
+    }
+
+    static func slashQuickActionSendsSlashText() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1"]
+        )
+
+        await model.sendQuickCommand(.slash)
+
+        try check(live.sent.last == .sendText(
+            commandID: "command-1", paneID: pane.paneID,
+            paneRef: pane.paneRef, text: "/"
+        ), "slash must be sent as text, not as a terminal key")
     }
 
     static func disconnectMarksPendingCommandUnknownWithoutResend() async throws {

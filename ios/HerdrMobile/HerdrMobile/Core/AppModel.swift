@@ -47,6 +47,7 @@ public enum QuickCommand: Equatable, Sendable {
     case escape
     case yes
     case no
+    case slash
     case allowOnce
     case deny
     case tab
@@ -621,6 +622,7 @@ public final class AppModel: ObservableObject {
 
     public func sendQuickCommand(_ command: QuickCommand) async {
         guard canStartNewCommand else { return }
+        returnToBottom()
         await beginCommand(.quick(command), isRetry: false)
     }
 
@@ -1007,6 +1009,11 @@ public final class AppModel: ObservableObject {
                     commandID: commandID, paneID: pane.paneID,
                     paneRef: pane.paneRef, text: "n"
                 )
+            case .slash:
+                return .sendText(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, text: "/"
+                )
             case .allowOnce:
                 return .action(
                     commandID: commandID, paneID: pane.paneID,
@@ -1043,7 +1050,7 @@ public final class AppModel: ObservableObject {
         case .controlL: "Ctrl+l"
         case .controlP: "Ctrl+p"
         case .controlO: "Ctrl+o"
-        case .yes, .no, .allowOnce, .deny:
+        case .yes, .no, .slash, .allowOnce, .deny:
             preconditionFailure("text and fixed actions do not map to keys")
         }
     }
