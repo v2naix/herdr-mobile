@@ -15,6 +15,7 @@
 		A10000000000000000000007 /* OriginDefaultsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* OriginDefaultsStore.swift */; };
 		A10000000000000000000008 /* NativeProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* NativeProtocol.swift */; };
 		A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* NetworkWebSocketConnection.swift */; };
+		A10000000000000000000010 /* PaneExperiencePrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* PaneExperiencePrototype.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 		B10000000000000000000008 /* HerdrMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HerdrMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000009 /* NativeProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProtocol.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* NetworkWebSocketConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkWebSocketConnection.swift; sourceTree = "<group>"; };
+		B10000000000000000000011 /* PaneExperiencePrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneExperiencePrototype.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +56,7 @@
 				B10000000000000000000001 /* HerdrMobileApp.swift */,
 				B10000000000000000000002 /* RootView.swift */,
 				D10000000000000000000003 /* Core */,
+				D10000000000000000000005 /* UIPrototype */,
 			);
 			path = HerdrMobile;
 			sourceTree = "<group>";
@@ -70,6 +73,14 @@
 				B10000000000000000000010 /* NetworkWebSocketConnection.swift */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		D10000000000000000000005 /* UIPrototype */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000011 /* PaneExperiencePrototype.swift */,
+			);
+			path = UIPrototype;
 			sourceTree = "<group>";
 		};
 		D10000000000000000000004 /* Products */ = {
@@ -147,6 +158,7 @@
 				A10000000000000000000007 /* OriginDefaultsStore.swift in Sources */,
 				A10000000000000000000008 /* NativeProtocol.swift in Sources */,
 				A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */,
+				A10000000000000000000010 /* PaneExperiencePrototype.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
