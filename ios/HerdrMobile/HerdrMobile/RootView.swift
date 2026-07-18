@@ -45,7 +45,7 @@ private struct SetupView: View {
 
     var body: some View {
         Form {
-            Section("受信任的 Mac") {
+            Section {
                 TextField(
                     "https://mac.example.ts.net",
                     text: Binding(
@@ -53,9 +53,6 @@ private struct SetupView: View {
                         set: model.updateOrigin
                     )
                 )
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                .autocorrectionDisabled()
 
                 SecureField(
                     "Bootstrap token",
@@ -64,8 +61,8 @@ private struct SetupView: View {
                         set: model.updateToken
                     )
                 )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+            } header: {
+                Text("受信任的 Mac")
             } footer: {
                 Text("仅接受通过系统证书验证的 HTTPS 地址。令牌会绑定到本机设备密码，不会同步到其他设备。")
             }
@@ -113,7 +110,7 @@ private struct ConfiguredView: View {
         }
         .navigationTitle("Herdr Mobile")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("更换服务器", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") {
                         model.requestServerReplacement()

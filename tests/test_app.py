@@ -64,6 +64,26 @@ class AppTests(unittest.TestCase):
             401,
         )
 
+    def test_expired_native_session_is_rejected_at_the_http_boundary(self):
+        now = [100.0]
+        app = create_app(
+            adapter=HerdrAdapter(FakeRunner()),
+            sessions=SessionStore("test-token", ttl_seconds=10, clock=lambda: now[0]),
+            allowed_origins={"https://mac.example.ts.net"},
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        now[0] = 111.0
+        response = client.delete(
+            "/api/native/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 401)
+
     def test_native_session_can_be_revoked_only_with_its_bearer(self):
         native = self.client.post(
             "/api/native/session",
