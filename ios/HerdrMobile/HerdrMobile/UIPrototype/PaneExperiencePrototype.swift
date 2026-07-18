@@ -43,6 +43,7 @@ struct MobileUIPrototypeRootView: View {
             .shadow(radius: 14, y: 6)
             .padding(.bottom, 8)
         }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -192,21 +193,40 @@ private struct TerminalFirstPrototype: View {
                 if let commandNote {
                     Text(commandNote).font(.caption).foregroundStyle(.orange)
                 }
+                HStack(spacing: 8) {
+                    Button {
+                        commandNote = "原型不会发送回复"
+                    } label: {
+                        Label("回复", systemImage: "arrowshape.turn.up.left.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
+
+                    Button("批准") { commandNote = "“批准”仅为演示" }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    Button("拒绝") { commandNote = "“拒绝”仅为演示" }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                }
+                .padding(.horizontal, 12)
+
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        Button("回复") { commandNote = "原型不会发送回复" }
-                            .buttonStyle(.borderedProminent)
-                        ForEach(["Enter", "Esc", "y", "n", "批准", "拒绝"], id: \.self) { key in
-                            Button(key) { commandNote = "“\(key)”仅为演示" }
-                                .buttonStyle(.bordered)
-                        }
+                    HStack(spacing: 7) {
+                        commandKey("Enter", tint: .blue)
+                        commandKey("Esc", tint: .orange)
+                        commandKey("y", tint: .green)
+                        commandKey("n", tint: .red)
                         Menu {
-                            Button("Ctrl+C") { commandNote = "原型不会发送按键" }
                             Button("Tab") { commandNote = "原型不会发送按键" }
+                            Button("↑") { commandNote = "原型不会发送按键" }
+                            Button("Ctrl+C") { commandNote = "原型不会发送按键" }
                         } label: {
-                            Image(systemName: "ellipsis")
+                            Label("更多", systemImage: "keyboard")
                         }
                         .buttonStyle(.bordered)
+                        .tint(.gray)
                     }
                     .padding(.horizontal, 12)
                 }
@@ -216,6 +236,12 @@ private struct TerminalFirstPrototype: View {
             .padding(.bottom, 64)
         }
         .background(Color(uiColor: .systemBackground))
+    }
+
+    private func commandKey(_ title: String, tint: Color) -> some View {
+        Button(title) { commandNote = "“\(title)”仅为演示" }
+            .buttonStyle(.bordered)
+            .tint(tint)
     }
 
     private var selectedOutput: String {
