@@ -391,6 +391,150 @@ class AppTests(unittest.TestCase):
         self.assertEqual(stale["type"], "error")
         self.assertIn("identity", stale["error"])
 
+    def test_native_command_acknowledges_only_after_execution(self):
+        runner = FakeRunner()
+        app = create_app(
+            adapter=HerdrAdapter(runner), sessions=SessionStore("test-token"),
+            allowed_origins={"http://testserver"}, secure_cookie=False,
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session", headers={"Authorization": "Bearer test-token"}
+        ).json()["token"]
+
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {token}"}
+        ) as socket:
+            epoch = socket.receive_json()["server_epoch"]
+            socket.send_json({
+                "type": "send_keys", "command_id": "command-1",
+                "pane_id": "w1:p1", "pane_ref": "term-safe", "keys": ["Enter"],
+            })
+            messages = []
+            while not any(message["type"].startswith("command_") for message in messages):
+                messages.append(socket.receive_json())
+
+        self.assertIn(
+            ["herdr", "pane", "send-keys", "w1:p1", "Enter"], runner.calls
+        )
+        self.assertEqual(
+            next(message for message in messages if message["type"] == "command_ack"),
+            {"type": "command_ack", "server_epoch": epoch, "command_id": "command-1"},
+        )
+
+    def test_native_command_validation_error_echoes_command_id_without_execution(self):
+        runner = FakeRunner()
+        app = create_app(
+            adapter=HerdrAdapter(runner), sessions=SessionStore("test-token"),
+            allowed_origins={"http://testserver"}, secure_cookie=False,
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session", headers={"Authorization": "Bearer test-token"}
+        ).json()["token"]
+
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {token}"}
+        ) as socket:
+            epoch = socket.receive_json()["server_epoch"]
+            socket.send_json({
+                "type": "send_keys", "command_id": "invalid-1",
+                "pane_id": "w1:p1", "pane_ref": "term-safe", "keys": ["F12"],
+            })
+            result = socket.receive_json()
+
+        self.assertEqual(result["type"], "command_error")
+        self.assertEqual(result["server_epoch"], epoch)
+        self.assertEqual(result["command_id"], "invalid-1")
+        self.assertIn("keys", result["error"])
+        self.assertNotIn(["herdr", "pane", "send-keys", "w1:p1", "F12"], runner.calls)
+
+    def test_native_command_rate_limit_error_remains_correlated(self):
+        token = self.client.post(
+            "/api/native/session", headers={"Authorization": "Bearer test-token"}
+        ).json()["token"]
+
+        with self.client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {token}"}
+        ) as socket:
+            epoch = socket.receive_json()["server_epoch"]
+            for index in range(30):
+                socket.send_json({
+                    "type": "send_keys", "command_id": f"invalid-{index}",
+                    "pane_id": "w1:p1", "pane_ref": "term-safe", "keys": ["F12"],
+                })
+                self.assertEqual(socket.receive_json()["type"], "command_error")
+            socket.send_json({
+                "type": "send_keys", "command_id": "limited-1",
+                "pane_id": "w1:p1", "pane_ref": "term-safe", "keys": ["Enter"],
+            })
+            result = socket.receive_json()
+
+        self.assertEqual(result, {
+            "type": "command_error", "server_epoch": epoch,
+            "command_id": "limited-1", "error": "rate limit exceeded",
+        })
+
+    def test_native_duplicate_command_id_returns_cached_result_without_reexecution(self):
+        runner = FakeRunner()
+        app = create_app(
+            adapter=HerdrAdapter(runner), sessions=SessionStore("test-token"),
+            allowed_origins={"http://testserver"}, secure_cookie=False,
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session", headers={"Authorization": "Bearer test-token"}
+        ).json()["token"]
+        command = {
+            "type": "send_text", "command_id": "duplicate-1",
+            "pane_id": "w1:p1", "pane_ref": "term-safe", "text": "continue",
+        }
+
+        epochs = []
+        for _ in range(2):
+            with client.websocket_connect(
+                "/ws", headers={"Authorization": f"Bearer {token}"}
+            ) as socket:
+                epochs.append(socket.receive_json()["server_epoch"])
+                socket.send_json(command)
+                while socket.receive_json()["type"] != "command_ack":
+                    pass
+
+        self.assertEqual(epochs[0], epochs[1])
+        self.assertEqual(
+            runner.calls.count(["herdr", "pane", "send-text", "w1:p1", "continue"]),
+            1,
+        )
+
+    def test_native_identity_mismatch_returns_correlated_failure(self):
+        runner = FakeRunner()
+        app = create_app(
+            adapter=HerdrAdapter(runner), sessions=SessionStore("test-token"),
+            allowed_origins={"http://testserver"}, secure_cookie=False,
+        )
+        client = TestClient(app)
+        token = client.post(
+            "/api/native/session", headers={"Authorization": "Bearer test-token"}
+        ).json()["token"]
+
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {token}"}
+        ) as socket:
+            socket.receive_json()
+            socket.send_json({
+                "type": "action", "command_id": "stale-1",
+                "pane_id": "w1:p1", "pane_ref": "old-terminal",
+                "action": "approve_once",
+            })
+            result = socket.receive_json()
+
+        self.assertEqual(result["type"], "command_error")
+        self.assertEqual(result["command_id"], "stale-1")
+        self.assertIn("identity", result["error"])
+        self.assertNotIn(
+            ["herdr", "pane", "send-keys", "w1:p1", "Enter"], runner.calls
+        )
+
     def test_authenticated_websocket_pushes_snapshot_and_plain_output(self):
         app = create_app(
             adapter=HerdrAdapter(FakeRunner()), sessions=SessionStore("test-token"),

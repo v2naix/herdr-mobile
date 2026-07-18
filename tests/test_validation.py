@@ -1,6 +1,6 @@
 import unittest
 
-from server.protocol import ProtocolError, parse_command, validate_lines
+from server.protocol import ProtocolError, parse_command, parse_native_command, validate_lines
 
 
 class ValidationTests(unittest.TestCase):
@@ -43,6 +43,26 @@ class ValidationTests(unittest.TestCase):
                 parse_command({
                     "type": "send_keys", "pane_id": "w1:p1", "pane_ref": "term-1", "keys": [key]
                 })
+
+    def test_native_commands_require_a_bounded_correlation_id(self):
+        native = parse_native_command({
+            "type": "send_keys", "command_id": "command-1",
+            "pane_id": "w1:p1", "pane_ref": "term-1", "keys": ["Enter"],
+        })
+        self.assertEqual(native.command_id, "command-1")
+        self.assertEqual(native.command.keys, ("Enter",))
+
+        for command_id in (None, "", "x" * 129):
+            with self.subTest(command_id=command_id), self.assertRaises(ProtocolError):
+                parse_native_command({
+                    "type": "send_keys", "command_id": command_id,
+                    "pane_id": "w1:p1", "pane_ref": "term-1", "keys": ["Enter"],
+                })
+        with self.assertRaises(ProtocolError):
+            parse_command({
+                "type": "send_keys", "command_id": "native-only",
+                "pane_id": "w1:p1", "pane_ref": "term-1", "keys": ["Enter"],
+            })
 
     def test_unverified_always_allow_is_rejected_even_when_confirmed(self):
         command = parse_command({

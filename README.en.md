@@ -20,7 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - Provides fixed `approve once / deny` actions verified against MacGuard's `ctx.ui.confirm`. The UI does not show `always allow`, and the server rejects that action.
 - Automatically reconnects WebSockets after transient network failures. Authentication or Origin rejection (`1008`) stops reconnection and returns to the login screen, preventing invalid request loops. Includes a dark iPhone UI, manifest, and service worker for installation on the iPhone Home Screen. Logging out immediately revokes the current in-memory session.
 - Provides `GET /healthz`, strict Origin and CSP enforcement, an 8 KiB WebSocket message limit, and connection and rate limits.
-- `ios/HerdrMobile/` contains the production iOS 26 SwiftUI client: one HTTPS Mac configuration, separate native bearer-session validation, passcode-bound Keychain storage for the bootstrap token, and agent-pane browsing; detail supports bottom-following output, frozen history reading, horizontally scrollable original width, and a dedicated reply editor.
+- `ios/HerdrMobile/` contains the production iOS 26 SwiftUI client: one HTTPS Mac configuration, separate native bearer-session validation, passcode-bound Keychain storage for the bootstrap token, and agent-pane browsing; detail supports bottom-following output, frozen history reading, horizontally scrollable original width, and fixed response operations that await acknowledgement, retain failed drafts, and never resend automatically.
 - Structured event logs do not record terminal input or output content. Uvicorn access logging is disabled by default.
 - The adapter accepts an injectable fake runner. Tests cover pane identity validation, input boundaries, authentication, and the XSS rendering boundary.
 
@@ -161,7 +161,7 @@ The WebSocket accepts only the following strict objects; unknown fields are reje
 - `send_keys`: `pane_id, pane_ref, keys[]`
 - `action`: `pane_id, pane_ref, action, confirmed?`
 
-Browser connections continue using those objects with cookie plus exact-Origin authentication. Native connections use a short-lived bearer handshake and first receive `hello` with `protocol_version + server_epoch`; native `subscribe` also requires `subscription_id`. `pane_snapshot` and `output_snapshot` are complete replacement snapshots carrying epoch, identity, and monotonic revisions.
+Browser connections continue using those objects with cookie plus exact-Origin authentication. Native connections use a short-lived bearer handshake and first receive `hello` with `protocol_version + server_epoch`; native `subscribe` also requires `subscription_id`. `pane_snapshot` and `output_snapshot` are complete replacement snapshots carrying epoch, identity, and monotonic revisions. Native text, key, and fixed-action requests also require `command_id`; the server returns a correlated acknowledgement or error after execution and uses a bounded in-memory cache within the current epoch to return known results without re-execution.
 
 Clients cannot send `agent_event`, and no corresponding API exists. State comes only from server polling. Limits are eight WebSocket connections, 30 messages per connection per 10 seconds, and 8 KiB per message. Uvicorn's total concurrency limit is 32. Commands time out after eight seconds.
 

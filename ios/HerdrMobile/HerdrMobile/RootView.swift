@@ -256,6 +256,8 @@ private struct PaneDetailView: View {
                 }
             }
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: model.state.successFeedbackCount)
+        .sensoryFeedback(.warning, trigger: model.state.warningFeedbackCount)
         .sheet(
             isPresented: Binding(
                 get: { model.state.isReplyEditorPresented },
@@ -272,6 +274,9 @@ private struct PaneDetailView: View {
             model.closePane()
         }
         .navigationTitle(pane.title)
+#if os(iOS)
+        .navigationBarBackButtonHidden(model.state.command?.status == .pending)
+#endif
     }
 
     @ViewBuilder
@@ -294,45 +299,104 @@ private struct PaneDetailView: View {
     }
 
     private var commandDeck: some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Button("Reply") { model.presentReplyEditor() }
-                        .buttonStyle(.borderedProminent)
-                    commandButton("Enter")
-                    commandButton("Esc")
-                    commandButton("y")
-                    commandButton("n")
-                    commandButton("Allow once")
-                    commandButton("Deny", role: .destructive)
+        VStack(spacing: 8) {
+            Group {
+                if let command = model.state.command {
+                    commandStatus(command)
+                } else {
+                    Color.clear
                 }
-                .padding(.horizontal)
             }
+            .frame(height: 40)
+            .padding(.horizontal)
 
-            Menu {
-                commandButton("Tab")
-                commandButton("↑")
-                commandButton("↓")
-                commandButton("←")
-                commandButton("→")
-                Divider()
-                commandButton("Ctrl+C")
-                commandButton("Ctrl+L")
-                commandButton("Ctrl+P")
-                commandButton("Ctrl+O")
-            } label: {
-                Label("更多按键", systemImage: "ellipsis.circle")
-                    .labelStyle(.iconOnly)
+            HStack(spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button("Reply") { model.presentReplyEditor() }
+                            .buttonStyle(.borderedProminent)
+                        commandButton("Enter", command: .enter)
+                        commandButton("Esc", command: .escape)
+                        commandButton("y", command: .yes)
+                        commandButton("n", command: .no)
+                        commandButton("Allow once", command: .allowOnce)
+                        commandButton("Deny", command: .deny, role: .destructive)
+                    }
+                    .padding(.horizontal)
+                }
+
+                Menu {
+                    commandButton("Tab", command: .tab)
+                    commandButton("↑", command: .up)
+                    commandButton("↓", command: .down)
+                    commandButton("←", command: .left)
+                    commandButton("→", command: .right)
+                    Divider()
+                    commandButton("Ctrl+C", command: .controlC)
+                    commandButton("Ctrl+L", command: .controlL)
+                    commandButton("Ctrl+P", command: .controlP)
+                    commandButton("Ctrl+O", command: .controlO)
+                } label: {
+                    Label("更多按键", systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
+                }
+                .disabled(!canSendCommand)
+                .padding(.trailing)
             }
-            .padding(.trailing)
         }
         .padding(.vertical, 10)
         .background(.bar)
     }
 
-    private func commandButton(_ title: String, role: ButtonRole? = nil) -> some View {
-        Button(title, role: role) {}
-            .disabled(true)
+    @ViewBuilder
+    private func commandStatus(_ command: CommandViewState) -> some View {
+        HStack(spacing: 8) {
+            switch command.status {
+            case .pending:
+                ProgressView()
+                Text(command.message ?? "等待服务器确认…")
+            case .acknowledged:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text(command.message ?? "已确认")
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(command.message ?? "命令失败")
+            case .outcomeUnknown:
+                Image(systemName: "questionmark.diamond.fill")
+                    .foregroundStyle(.orange)
+                Text(command.message ?? "结果未知：命令可能已经执行。")
+                Spacer()
+                if command.canRetry {
+                    Button("明确重试") {
+                        Task { await model.retryCommand() }
+                    }
+                    .disabled(model.state.connection != .online)
+                }
+            }
+        }
+        .font(.footnote)
+        .lineLimit(2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("command-status")
+    }
+
+    private func commandButton(
+        _ title: String,
+        command: QuickCommand,
+        role: ButtonRole? = nil
+    ) -> some View {
+        Button(title, role: role) {
+            Task { await model.sendQuickCommand(command) }
+        }
+        .disabled(!canSendCommand)
+    }
+
+    private var canSendCommand: Bool {
+        model.state.connection == .online
+            && model.state.command?.status != .pending
+            && model.state.command?.status != .outcomeUnknown
     }
 
     private func returnToBottom() {
@@ -347,11 +411,46 @@ private struct ReplyEditor: View {
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: Binding(
-                get: { model.state.replyDraft },
-                set: model.updateReplyDraft
-            ))
-            .font(.body)
+            VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: Binding(
+                    get: { model.state.replyDraft },
+                    set: model.updateReplyDraft
+                ))
+                .font(.body)
+                .disabled(replyIsLocked)
+
+                if let error = model.state.replyError {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                } else if let command = model.state.command {
+                    switch command.status {
+                    case .pending:
+                        HStack {
+                            ProgressView()
+                            Text(command.message ?? "等待服务器确认…")
+                        }
+                        .font(.footnote)
+                    case .failed:
+                        Text(command.message ?? "命令失败，草稿已保留。")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    case .outcomeUnknown:
+                        HStack {
+                            Text(command.message ?? "结果未知，草稿已保留。")
+                            Spacer()
+                            Button("明确重试") {
+                                Task { await model.retryCommand() }
+                            }
+                            .disabled(model.state.connection != .online)
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                    case .acknowledged:
+                        EmptyView()
+                    }
+                }
+            }
             .padding()
             .navigationTitle("回复 \(paneTitle)")
             .toolbar {
@@ -359,10 +458,21 @@ private struct ReplyEditor: View {
                     Button("关闭") { model.dismissReplyEditor() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("发送") {}
-                        .disabled(true)
+                    Button("发送") {
+                        Task { await model.sendReply() }
+                    }
+                    .disabled(
+                        model.state.connection != .online
+                        || model.state.command?.status == .pending
+                        || model.state.command?.status == .outcomeUnknown
+                    )
                 }
             }
         }
+    }
+
+    private var replyIsLocked: Bool {
+        model.state.command?.status == .pending
+            || model.state.command?.status == .outcomeUnknown
     }
 }

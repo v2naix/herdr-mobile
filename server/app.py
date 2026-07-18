@@ -7,7 +7,6 @@ import os
 import secrets
 import time
 from collections import deque
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +15,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import SessionStore, load_or_create_token
+from .commands import CommandResultCache
 from .herdr import HerdrAdapter, HerdrError, SubprocessRunner
-from .protocol import Action, ProtocolError, SendKeys, SendText, parse_command, validate_lines
+from .protocol import (
+    Action, ProtocolError, SendKeys, SendText, parse_command,
+    parse_native_command, validate_lines,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -79,6 +82,7 @@ def create_app(
     pane_versions = PaneSnapshotVersions()
     session_attempts: deque[float] = deque()
     server_epoch = secrets.token_urlsafe(24)
+    command_results = CommandResultCache()
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -182,6 +186,7 @@ def create_app(
                 native=native,
                 server_epoch=server_epoch,
                 pane_versions=pane_versions,
+                command_results=command_results,
             )
         finally:
             await limit.release()
@@ -206,6 +211,7 @@ async def _serve_socket(
     native: bool = False,
     server_epoch: str = "",
     pane_versions: PaneSnapshotVersions | None = None,
+    command_results: CommandResultCache | None = None,
 ) -> None:
     selected: tuple[str, str, int] | None = None
     subscription_id: str | None = None
@@ -214,6 +220,7 @@ async def _serve_socket(
     last_output = ""
     local_pane_revision = 0
     output_revision = 0
+    command_results = command_results or CommandResultCache()
     if native:
         await ws.send_json({
             "type": "hello",
@@ -235,9 +242,28 @@ async def _serve_socket(
             while recent and recent[0] <= now - RATE_WINDOW:
                 recent.popleft()
             if len(recent) >= RATE_COUNT:
-                await ws.send_json({"type": "error", "error": "rate limit exceeded"})
+                rate_limited: Any = None
+                if native:
+                    try:
+                        rate_limited = json.loads(text)
+                    except json.JSONDecodeError:
+                        pass
+                command_id = (
+                    rate_limited.get("command_id")
+                    if isinstance(rate_limited, dict) else None
+                )
+                if isinstance(command_id, str) and 1 <= len(command_id) <= 128:
+                    await ws.send_json({
+                        "type": "command_error",
+                        "server_epoch": server_epoch,
+                        "command_id": command_id,
+                        "error": "rate limit exceeded",
+                    })
+                else:
+                    await ws.send_json({"type": "error", "error": "rate limit exceeded"})
                 continue
             recent.append(now)
+            data: Any = None
             try:
                 data = json.loads(text)
                 if isinstance(data, dict) and data.get("type") == "subscribe":
@@ -275,7 +301,39 @@ async def _serve_socket(
                         selected = (pane_id, pane_ref, lines)
                         last_output = ""
                 elif native:
-                    raise ProtocolError("invalid native command type")
+                    native_command = parse_native_command(data)
+                    command = native_command.command
+
+                    async def execute_native_command() -> None:
+                        if isinstance(command, SendText):
+                            await adapter.send_text(
+                                command.pane_id, command.pane_ref, command.text
+                            )
+                        elif isinstance(command, SendKeys):
+                            await adapter.send_keys(
+                                command.pane_id, command.pane_ref, command.keys
+                            )
+                        elif isinstance(command, Action):
+                            await adapter.action(
+                                command.pane_id, command.pane_ref, command.action
+                            )
+
+                    fingerprint = json.dumps(
+                        {key: value for key, value in data.items() if key != "command_id"},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    result = await command_results.execute(
+                        native_command.command_id, fingerprint, execute_native_command
+                    )
+                    response = {
+                        "type": "command_ack" if result.acknowledged else "command_error",
+                        "server_epoch": server_epoch,
+                        "command_id": native_command.command_id,
+                    }
+                    if result.error is not None:
+                        response["error"] = result.error
+                    await ws.send_json(response)
                 else:
                     command = parse_command(data)
                     if isinstance(command, SendText):
@@ -286,7 +344,16 @@ async def _serve_socket(
                         await adapter.action(command.pane_id, command.pane_ref, command.action)
                     await ws.send_json({"type": "ack", "command": data.get("type")})
             except (json.JSONDecodeError, ProtocolError, HerdrError, KeyError) as error:
-                await ws.send_json({"type": "error", "error": str(error)})
+                command_id = data.get("command_id") if isinstance(data, dict) else None
+                if native and isinstance(command_id, str) and 1 <= len(command_id) <= 128:
+                    await ws.send_json({
+                        "type": "command_error",
+                        "server_epoch": server_epoch,
+                        "command_id": command_id,
+                        "error": str(error),
+                    })
+                else:
+                    await ws.send_json({"type": "error", "error": str(error)})
                 if native:
                     continue
         try:

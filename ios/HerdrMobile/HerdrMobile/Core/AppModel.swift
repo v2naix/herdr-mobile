@@ -25,6 +25,50 @@ public enum ReaderWidthMode: Equatable, Sendable {
     case original
 }
 
+public enum QuickCommand: Equatable, Sendable {
+    case enter
+    case escape
+    case yes
+    case no
+    case allowOnce
+    case deny
+    case tab
+    case up
+    case down
+    case left
+    case right
+    case controlC
+    case controlL
+    case controlP
+    case controlO
+}
+
+public enum CommandStatus: Equatable, Sendable {
+    case pending
+    case acknowledged
+    case failed
+    case outcomeUnknown
+}
+
+public struct CommandViewState: Equatable, Sendable {
+    public let commandID: String
+    public var status: CommandStatus
+    public var message: String?
+    public var canRetry: Bool
+
+    public init(
+        commandID: String,
+        status: CommandStatus,
+        message: String? = nil,
+        canRetry: Bool = false
+    ) {
+        self.commandID = commandID
+        self.status = status
+        self.message = message
+        self.canRetry = canRetry
+    }
+}
+
 public struct AppViewState: Equatable, Sendable {
     public var screen: AppScreen
     public var origin: String
@@ -40,6 +84,10 @@ public struct AppViewState: Equatable, Sendable {
     public var readerWidth: ReaderWidthMode
     public var isReplyEditorPresented: Bool
     public var replyDraft: String
+    public var replyError: String?
+    public var command: CommandViewState?
+    public var successFeedbackCount: Int
+    public var warningFeedbackCount: Int
 
     public init(
         screen: AppScreen = .setup,
@@ -55,7 +103,11 @@ public struct AppViewState: Equatable, Sendable {
         hasPendingOutput: Bool = false,
         readerWidth: ReaderWidthMode = .wrapped,
         isReplyEditorPresented: Bool = false,
-        replyDraft: String = ""
+        replyDraft: String = "",
+        replyError: String? = nil,
+        command: CommandViewState? = nil,
+        successFeedbackCount: Int = 0,
+        warningFeedbackCount: Int = 0
     ) {
         self.screen = screen
         self.origin = origin
@@ -71,6 +123,10 @@ public struct AppViewState: Equatable, Sendable {
         self.readerWidth = readerWidth
         self.isReplyEditorPresented = isReplyEditorPresented
         self.replyDraft = replyDraft
+        self.replyError = replyError
+        self.command = command
+        self.successFeedbackCount = successFeedbackCount
+        self.warningFeedbackCount = warningFeedbackCount
     }
 }
 
@@ -121,6 +177,11 @@ public protocol OriginPersisting: AnyObject {
     func clearOrigin()
 }
 
+private enum CommandIntent {
+    case reply(String)
+    case quick(QuickCommand)
+}
+
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public private(set) var state = AppViewState()
@@ -131,6 +192,7 @@ public final class AppModel: ObservableObject {
     private let configuration: OriginPersisting
     private let liveConnection: NativeConnectionServing?
     private let identifier: @MainActor () -> String
+    private let commandTimeout: Duration
     private var nativeSession: NativeSession?
     private var connectionTask: Task<Void, Never>?
     private var serverEpoch: String?
@@ -138,19 +200,24 @@ public final class AppModel: ObservableObject {
     private var subscriptionID: String?
     private var outputRevision = 0
     private var pendingOutputText: String?
+    private var pendingCommandIntent: CommandIntent?
+    private var commandTimeoutTask: Task<Void, Never>?
+    private var commandNoticeTask: Task<Void, Never>?
 
     @_spi(Testing) public init(
         sessions: NativeSessionServing,
         credentials: CredentialStoring,
         configuration: OriginPersisting,
         liveConnection: NativeConnectionServing? = nil,
-        identifier: @escaping @MainActor () -> String = { UUID().uuidString }
+        identifier: @escaping @MainActor () -> String = { UUID().uuidString },
+        commandTimeout: Duration = .seconds(10)
     ) {
         self.sessions = sessions
         self.credentials = credentials
         self.configuration = configuration
         self.liveConnection = liveConnection
         self.identifier = identifier
+        self.commandTimeout = commandTimeout
     }
 
     public func start() async {
@@ -292,6 +359,33 @@ public final class AppModel: ObservableObject {
     public func updateReplyDraft(_ draft: String) {
         guard state.selectedPane != nil else { return }
         state.replyDraft = draft
+        state.replyError = nil
+    }
+
+    public func sendReply() async {
+        guard state.selectedPane != nil,
+              state.connection == .online,
+              canStartNewCommand
+        else { return }
+        guard validateReply(state.replyDraft) else {
+            state.replyError = "回复必须为 1–20 行、最多 4096 个 UTF-8 字节，且不能包含控制字符。"
+            state.warningFeedbackCount += 1
+            return
+        }
+        state.replyError = nil
+        await beginCommand(.reply(state.replyDraft), isRetry: false)
+    }
+
+    public func sendQuickCommand(_ command: QuickCommand) async {
+        guard canStartNewCommand else { return }
+        await beginCommand(.quick(command), isRetry: false)
+    }
+
+    public func retryCommand() async {
+        guard state.command?.status == .outcomeUnknown,
+              let pendingCommandIntent
+        else { return }
+        await beginCommand(pendingCommandIntent, isRetry: true)
     }
 
     public func requestServerReplacement() {
@@ -314,6 +408,10 @@ public final class AppModel: ObservableObject {
 
         connectionTask?.cancel()
         connectionTask = nil
+        commandTimeoutTask?.cancel()
+        commandTimeoutTask = nil
+        commandNoticeTask?.cancel()
+        commandNoticeTask = nil
         liveConnection?.cancel()
         nativeSession = nil
         configuration.clearOrigin()
@@ -334,6 +432,7 @@ public final class AppModel: ObservableObject {
 
     private func beginLiveConnection(origin: String, sessionToken: String) {
         guard let liveConnection else { return }
+        markPendingCommandOutcomeUnknown()
         connectionTask?.cancel()
         let messages = liveConnection.open(origin: origin, sessionToken: sessionToken)
         connectionTask = Task { [weak self] in
@@ -343,10 +442,12 @@ public final class AppModel: ObservableObject {
                     self?.accept(message)
                 }
                 if self?.state.connection != .incompatibleProtocol {
+                    self?.markPendingCommandOutcomeUnknown()
                     self?.state.connection = .offline
                 }
             } catch {
                 if self?.state.connection != .incompatibleProtocol {
+                    self?.markPendingCommandOutcomeUnknown()
                     self?.state.connection = .failed
                     self?.state.error = "实时连接已断开。"
                 }
@@ -364,6 +465,7 @@ public final class AppModel: ObservableObject {
                 return
             }
             if serverEpoch != newEpoch {
+                markPendingCommandOutcomeUnknown()
                 serverEpoch = newEpoch
                 paneRevision = 0
                 outputRevision = 0
@@ -401,6 +503,40 @@ public final class AppModel: ObservableObject {
                 pendingOutputText = text
                 state.hasPendingOutput = true
             }
+        case let .commandAck(messageEpoch, commandID):
+            guard messageEpoch == serverEpoch,
+                  state.command?.commandID == commandID,
+                  state.command?.status == .pending
+            else { return }
+            commandTimeoutTask?.cancel()
+            commandTimeoutTask = nil
+            state.command = CommandViewState(
+                commandID: commandID,
+                status: .acknowledged,
+                message: "已确认"
+            )
+            state.successFeedbackCount += 1
+            if case .reply = pendingCommandIntent {
+                state.replyDraft = ""
+                state.replyError = nil
+                state.isReplyEditorPresented = false
+            }
+            pendingCommandIntent = nil
+            scheduleAcknowledgementClear(commandID: commandID)
+        case let .commandError(messageEpoch, commandID, error):
+            guard messageEpoch == serverEpoch,
+                  state.command?.commandID == commandID,
+                  state.command?.status == .pending
+            else { return }
+            commandTimeoutTask?.cancel()
+            commandTimeoutTask = nil
+            state.command = CommandViewState(
+                commandID: commandID,
+                status: .failed,
+                message: error
+            )
+            state.warningFeedbackCount += 1
+            pendingCommandIntent = nil
         case let .error(error):
             state.error = error
         }
@@ -413,7 +549,157 @@ public final class AppModel: ObservableObject {
         state.readerWidth = .wrapped
         state.isReplyEditorPresented = false
         state.replyDraft = ""
+        state.replyError = nil
+        state.command = nil
         pendingOutputText = nil
+        pendingCommandIntent = nil
+        commandTimeoutTask?.cancel()
+        commandTimeoutTask = nil
+        commandNoticeTask?.cancel()
+        commandNoticeTask = nil
+    }
+
+    private func beginCommand(_ intent: CommandIntent, isRetry: Bool) async {
+        guard let pane = state.selectedPane,
+              let liveConnection,
+              state.connection == .online,
+              isRetry ? state.command?.status == .outcomeUnknown : canStartNewCommand
+        else { return }
+        commandNoticeTask?.cancel()
+        commandNoticeTask = nil
+        let commandID = identifier()
+        let message = clientMessage(for: intent, commandID: commandID, pane: pane)
+        state.command = CommandViewState(
+            commandID: commandID,
+            status: .pending,
+            message: isRetry ? "正在重试；上一命令可能已经执行。" : nil
+        )
+        pendingCommandIntent = intent
+        do {
+            try await liveConnection.send(message)
+            if state.command?.commandID == commandID,
+               state.command?.status == .pending {
+                scheduleCommandTimeout(commandID: commandID)
+            }
+        } catch {
+            markCommandOutcomeUnknown(commandID: commandID)
+        }
+    }
+
+    private func clientMessage(
+        for intent: CommandIntent,
+        commandID: String,
+        pane: AgentPane
+    ) -> NativeClientMessage {
+        switch intent {
+        case let .reply(text):
+            return .sendText(
+                commandID: commandID, paneID: pane.paneID,
+                paneRef: pane.paneRef, text: text
+            )
+        case let .quick(command):
+            switch command {
+            case .yes:
+                return .sendText(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, text: "y"
+                )
+            case .no:
+                return .sendText(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, text: "n"
+                )
+            case .allowOnce:
+                return .action(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, action: "approve_once"
+                )
+            case .deny:
+                return .action(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, action: "deny"
+                )
+            default:
+                return .sendKeys(
+                    commandID: commandID, paneID: pane.paneID,
+                    paneRef: pane.paneRef, keys: [key(for: command)]
+                )
+            }
+        }
+    }
+
+    private var canStartNewCommand: Bool {
+        state.command?.status != .pending && state.command?.status != .outcomeUnknown
+    }
+
+    private func key(for command: QuickCommand) -> String {
+        switch command {
+        case .enter: "Enter"
+        case .escape: "Escape"
+        case .tab: "Tab"
+        case .up: "Up"
+        case .down: "Down"
+        case .left: "Left"
+        case .right: "Right"
+        case .controlC: "Ctrl+c"
+        case .controlL: "Ctrl+l"
+        case .controlP: "Ctrl+p"
+        case .controlO: "Ctrl+o"
+        case .yes, .no, .allowOnce, .deny:
+            preconditionFailure("text and fixed actions do not map to keys")
+        }
+    }
+
+    private func validateReply(_ text: String) -> Bool {
+        guard !text.isEmpty,
+              text.utf8.count <= 4096,
+              text.split(separator: "\n", omittingEmptySubsequences: false).count <= 20
+        else { return false }
+        return !text.unicodeScalars.contains { scalar in
+            (scalar.value < 32 && scalar != "\n") || scalar.value == 127
+        }
+    }
+
+    private func scheduleAcknowledgementClear(commandID: String) {
+        commandNoticeTask?.cancel()
+        commandNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled,
+                  self?.state.command?.commandID == commandID,
+                  self?.state.command?.status == .acknowledged
+            else { return }
+            self?.state.command = nil
+        }
+    }
+
+    private func scheduleCommandTimeout(commandID: String) {
+        commandTimeoutTask?.cancel()
+        let timeout = commandTimeout
+        commandTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled else { return }
+            self?.markCommandOutcomeUnknown(commandID: commandID)
+        }
+    }
+
+    private func markCommandOutcomeUnknown(commandID: String) {
+        guard state.command?.commandID == commandID,
+              state.command?.status == .pending
+        else { return }
+        commandTimeoutTask?.cancel()
+        commandTimeoutTask = nil
+        state.command = CommandViewState(
+            commandID: commandID,
+            status: .outcomeUnknown,
+            message: "结果未知：命令可能已经执行。",
+            canRetry: true
+        )
+        state.warningFeedbackCount += 1
+    }
+
+    private func markPendingCommandOutcomeUnknown() {
+        guard let command = state.command, command.status == .pending else { return }
+        markCommandOutcomeUnknown(commandID: command.commandID)
     }
 
     private func message(for error: Error) -> String {

@@ -28,8 +28,16 @@ struct AppModelTests {
         try await returningToBottomAppliesOnlyNewestPendingSnapshot()
         try await widthModeIsIndependentAndResetsAfterLeavingPane()
         try await replyEditorPresentationPreservesReaderContext()
+        try await acknowledgedReplyClearsDraftOnlyAfterServerResult()
+        try await invalidReplyNeverLeavesTheDevice()
+        try await failedReplyRetainsDraftEditorAndReaderPosition()
+        try await onePendingCommandGatesCompetingQuickActions()
+        try await boundedQuickActionsMapToFixedProtocolOperations()
+        try await disconnectMarksPendingCommandUnknownWithoutResend()
+        try await explicitRetryAfterUnknownSendUsesNewCommandID()
+        try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 15 passed")
+        print("HerdrMobileCoreTests: 23 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -146,6 +154,23 @@ struct AppModelTests {
             "type": "subscribe", "subscription_id": "subscription-1",
             "pane_id": "w1:p1", "pane_ref": "term-1", "lines": 120,
         ], "subscribe should encode every required identity field")
+
+        let result = try JSONDecoder().decode(NativeServerMessage.self, from: Data("""
+        {"type":"command_error","server_epoch":"epoch-1","command_id":"command-1","error":"stale pane"}
+        """.utf8))
+        try check(result == .commandError(
+            serverEpoch: "epoch-1", commandID: "command-1", error: "stale pane"
+        ), "command errors should decode with epoch and correlation identity")
+
+        let commandData = try JSONEncoder().encode(NativeClientMessage.action(
+            commandID: "command-2", paneID: "w1:p1",
+            paneRef: "term-1", action: "approve_once"
+        ))
+        let commandObject = try JSONSerialization.jsonObject(with: commandData) as? [String: AnyHashable]
+        try check(commandObject == [
+            "type": "action", "command_id": "command-2",
+            "pane_id": "w1:p1", "pane_ref": "term-1", "action": "approve_once",
+        ], "native actions should encode only the fixed correlated shape")
     }
 
     static func livePaneSnapshotsDriveVisibleNavigationState() async throws {
@@ -340,6 +365,202 @@ struct AppModelTests {
         try check(live.sent.count == 1, "editor presentation must not alter the subscription")
     }
 
+    static func acknowledgedReplyClearsDraftOnlyAfterServerResult() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1"]
+        )
+        model.presentReplyEditor()
+        model.updateReplyDraft("请继续")
+
+        await model.sendReply()
+
+        try check(model.state.command?.status == .pending, "reply should remain pending until acknowledgement")
+        try check(model.state.replyDraft == "请继续", "pending reply must retain its draft")
+        try check(model.state.isReplyEditorPresented, "pending reply must retain its editor")
+        try check(live.sent.last == .sendText(
+            commandID: "command-1", paneID: pane.paneID,
+            paneRef: pane.paneRef, text: "请继续"
+        ), "reply should send a correlated bounded text command")
+
+        live.emit(.commandAck(serverEpoch: "epoch-1", commandID: "command-1"))
+        await settle()
+
+        try check(model.state.command?.status == .acknowledged, "ack should be visible as success")
+        try check(model.state.replyDraft.isEmpty, "only acknowledged success should clear the draft")
+        try check(!model.state.isReplyEditorPresented, "only acknowledged success should dismiss the editor")
+        try check(model.state.successFeedbackCount == 1, "acknowledged success should request one success haptic")
+    }
+
+    static func invalidReplyNeverLeavesTheDevice() async throws {
+        let (model, live, _) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        let invalidDrafts = [
+            "",
+            String(repeating: "é", count: 2_049),
+            Array(repeating: "line", count: 21).joined(separator: "\n"),
+            "hidden\u{1b}[2J",
+        ]
+
+        for draft in invalidDrafts {
+            model.updateReplyDraft(draft)
+            await model.sendReply()
+            try check(model.state.replyDraft == draft, "invalid reply should retain its draft")
+            try check(model.state.replyError != nil, "invalid reply should explain the existing limits")
+        }
+        try check(live.sent.count == 1, "invalid replies must never be sent")
+    }
+
+    static func failedReplyRetainsDraftEditorAndReaderPosition() async throws {
+        let (model, live, _) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1"]
+        )
+        model.userScrolledAwayFromBottom()
+        model.presentReplyEditor()
+        model.updateReplyDraft("请继续")
+        await model.sendReply()
+
+        live.emit(.commandError(
+            serverEpoch: "epoch-1", commandID: "command-1",
+            error: "pane identity changed; refresh required"
+        ))
+        await settle()
+
+        try check(model.state.command?.status == .failed, "server rejection should be a local command failure")
+        try check(model.state.command?.message?.contains("identity") == true, "failure should explain the command problem")
+        try check(model.state.replyDraft == "请继续", "failed reply must retain its draft")
+        try check(model.state.isReplyEditorPresented, "failed reply must retain its editor")
+        try check(model.state.readerMode == .readingHistory, "failed reply must preserve reader position mode")
+        try check(model.state.warningFeedbackCount == 1, "explicit failure should request warning feedback")
+        try check(model.state.connection == .online, "command failure must not redefine connection state")
+    }
+
+    static func onePendingCommandGatesCompetingQuickActions() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1", "command-2"]
+        )
+
+        await model.sendQuickCommand(.enter)
+        await model.sendQuickCommand(.deny)
+
+        try check(live.sent.count == 2, "a pending mutation should gate a competing command")
+        try check(live.sent.last == .sendKeys(
+            commandID: "command-1", paneID: pane.paneID,
+            paneRef: pane.paneRef, keys: ["Enter"]
+        ), "Enter must use its fixed key operation")
+
+        live.emit(.commandAck(serverEpoch: "epoch-1", commandID: "command-1"))
+        await settle()
+        await model.sendQuickCommand(.deny)
+        try check(live.sent.last == .action(
+            commandID: "command-2", paneID: pane.paneID,
+            paneRef: pane.paneRef, action: "deny"
+        ), "Deny must use its fixed server action")
+    }
+
+    static func boundedQuickActionsMapToFixedProtocolOperations() async throws {
+        let commands: [QuickCommand] = [
+            .enter, .escape, .yes, .no, .allowOnce, .deny, .tab,
+            .up, .down, .left, .right, .controlC, .controlL, .controlP, .controlO,
+        ]
+        let commandIDs = commands.indices.map { "command-\($0 + 1)" }
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1"] + commandIDs
+        )
+
+        for (command, commandID) in zip(commands, commandIDs) {
+            await model.sendQuickCommand(command)
+            live.emit(.commandAck(serverEpoch: "epoch-1", commandID: commandID))
+            await settle()
+        }
+
+        let expected: [NativeClientMessage] = [
+            .sendKeys(commandID: "command-1", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Enter"]),
+            .sendKeys(commandID: "command-2", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Escape"]),
+            .sendText(commandID: "command-3", paneID: pane.paneID, paneRef: pane.paneRef, text: "y"),
+            .sendText(commandID: "command-4", paneID: pane.paneID, paneRef: pane.paneRef, text: "n"),
+            .action(commandID: "command-5", paneID: pane.paneID, paneRef: pane.paneRef, action: "approve_once"),
+            .action(commandID: "command-6", paneID: pane.paneID, paneRef: pane.paneRef, action: "deny"),
+            .sendKeys(commandID: "command-7", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Tab"]),
+            .sendKeys(commandID: "command-8", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Up"]),
+            .sendKeys(commandID: "command-9", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Down"]),
+            .sendKeys(commandID: "command-10", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Left"]),
+            .sendKeys(commandID: "command-11", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Right"]),
+            .sendKeys(commandID: "command-12", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Ctrl+c"]),
+            .sendKeys(commandID: "command-13", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Ctrl+l"]),
+            .sendKeys(commandID: "command-14", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Ctrl+p"]),
+            .sendKeys(commandID: "command-15", paneID: pane.paneID, paneRef: pane.paneRef, keys: ["Ctrl+o"]),
+        ]
+        try check(Array(live.sent.dropFirst()) == expected, "only fixed allowlisted quick operations should be expressible")
+    }
+
+    static func disconnectMarksPendingCommandUnknownWithoutResend() async throws {
+        let (model, live, _) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1"]
+        )
+        model.presentReplyEditor()
+        model.updateReplyDraft("继续处理")
+        await model.sendReply()
+
+        live.finish()
+        await settle()
+
+        try check(model.state.command?.status == .outcomeUnknown, "disconnect before ack should mark the result unknown")
+        try check(model.state.command?.canRetry == true, "unknown outcome should offer an explicit retry")
+        try check(model.state.command?.message?.contains("可能已经执行") == true, "unknown outcome must warn against exactly-once assumptions")
+        try check(model.state.replyDraft == "继续处理", "unknown reply outcome must retain its draft")
+        try check(live.sent.count == 2, "disconnect must never resend automatically")
+    }
+
+    static func explicitRetryAfterUnknownSendUsesNewCommandID() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1", "command-2"]
+        )
+        model.presentReplyEditor()
+        model.updateReplyDraft("继续处理")
+        live.sendError = TestFailure(description: "send failed")
+        await model.sendReply()
+        live.sendError = nil
+        await model.sendQuickCommand(.enter)
+        try check(live.sent.count == 2, "unknown outcome should require the explicit retry path")
+
+        await model.retryCommand()
+
+        try check(model.state.command?.status == .pending, "explicit retry should become a new pending command")
+        try check(model.state.command?.commandID == "command-2", "retry must use a new command ID")
+        try check(model.state.command?.message?.contains("上一命令可能已经执行") == true, "retry should retain the original outcome warning")
+        try check(live.sent.last == .sendText(
+            commandID: "command-2", paneID: pane.paneID,
+            paneRef: pane.paneRef, text: "继续处理"
+        ), "explicit retry should preserve the original bounded operation")
+    }
+
+    static func commandTimeoutMarksOutcomeUnknownWithoutClearingDraft() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(
+            live: live,
+            identifiers: ["subscription-1", "command-1"],
+            commandTimeout: .milliseconds(1)
+        )
+        let pane = AgentPane(
+            paneID: "w1:p1", paneRef: "term-1", title: "Agent",
+            status: "working", cwd: "/repo", workspaceID: "w1"
+        )
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [pane]))
+        await settle()
+        await model.openPane(pane)
+        model.presentReplyEditor()
+        model.updateReplyDraft("保留草稿")
+        await model.sendReply()
+
+        try await Task.sleep(for: .milliseconds(10))
+
+        try check(model.state.command?.status == .outcomeUnknown, "timeout before ack should mark the result unknown")
+        try check(model.state.replyDraft == "保留草稿", "timeout must retain the reply draft")
+        try check(model.state.isReplyEditorPresented, "timeout must retain the reply editor")
+        try check(live.sent.count == 2, "timeout must not resend automatically")
+    }
+
     private static func modelWithOpenPane(
         identifiers: [String]
     ) async -> (AppModel, FakeLiveConnection, AgentPane) {
@@ -359,7 +580,8 @@ struct AppModelTests {
 
     private static func configuredModel(
         live: FakeLiveConnection,
-        identifiers: [String] = []
+        identifiers: [String] = [],
+        commandTimeout: Duration = .seconds(10)
     ) -> AppModel {
         let credentials = MemoryCredentials()
         try! credentials.saveToken("bootstrap", for: "https://mac.example")
@@ -368,7 +590,8 @@ struct AppModelTests {
             credentials: credentials,
             configuration: MemoryConfiguration(origin: "https://mac.example"),
             liveConnection: live,
-            identifier: IdentifierSequence(identifiers).next
+            identifier: IdentifierSequence(identifiers).next,
+            commandTimeout: commandTimeout
         )
     }
 
@@ -406,6 +629,7 @@ private final class FakeLiveConnection: NativeConnectionServing {
     private var continuation: AsyncThrowingStream<NativeServerMessage, Error>.Continuation?
     var sent: [NativeClientMessage] = []
     var cancelCount = 0
+    var sendError: Error?
 
     func open(origin: String, sessionToken: String) -> AsyncThrowingStream<NativeServerMessage, Error> {
         AsyncThrowingStream { continuation = $0 }
@@ -413,6 +637,7 @@ private final class FakeLiveConnection: NativeConnectionServing {
 
     func send(_ message: NativeClientMessage) async throws {
         sent.append(message)
+        if let sendError { throw sendError }
     }
 
     func cancel() {
@@ -422,6 +647,10 @@ private final class FakeLiveConnection: NativeConnectionServing {
 
     func emit(_ message: NativeServerMessage) {
         continuation?.yield(message)
+    }
+
+    func finish() {
+        continuation?.finish()
     }
 }
 

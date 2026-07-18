@@ -39,6 +39,12 @@ class Action:
     action: str
 
 
+@dataclass(frozen=True)
+class NativeCommand:
+    command_id: str
+    command: SendText | SendKeys | Action
+
+
 def validate_lines(value: Any) -> int:
     if value is None:
         return 120
@@ -62,6 +68,17 @@ def _pane_ref(value: Any) -> str:
 def _exact_fields(data: dict[str, Any], allowed: set[str]) -> None:
     if set(data) - allowed:
         raise ProtocolError("unknown field")
+
+
+def parse_native_command(data: Any) -> NativeCommand:
+    if not isinstance(data, dict):
+        raise ProtocolError("command must be an object")
+    command_id = data.get("command_id")
+    if not isinstance(command_id, str) or not 1 <= len(command_id) <= 128:
+        raise ProtocolError("invalid command_id")
+    payload = dict(data)
+    del payload["command_id"]
+    return NativeCommand(command_id, parse_command(payload))
 
 
 def parse_command(data: Any) -> SendText | SendKeys | Action:

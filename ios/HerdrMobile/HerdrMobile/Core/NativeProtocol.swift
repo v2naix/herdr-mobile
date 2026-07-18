@@ -57,6 +57,8 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
         revision: Int,
         text: String
     )
+    case commandAck(serverEpoch: String, commandID: String)
+    case commandError(serverEpoch: String, commandID: String, error: String)
     case error(String)
 
     private enum CodingKeys: String, CodingKey {
@@ -68,6 +70,7 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
         case subscriptionID = "subscription_id"
         case paneID = "pane_id"
         case paneRef = "pane_ref"
+        case commandID = "command_id"
         case text
         case error
     }
@@ -95,6 +98,17 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
                 revision: try values.decode(Int.self, forKey: .revision),
                 text: try values.decode(String.self, forKey: .text)
             )
+        case "command_ack":
+            self = .commandAck(
+                serverEpoch: try values.decode(String.self, forKey: .serverEpoch),
+                commandID: try values.decode(String.self, forKey: .commandID)
+            )
+        case "command_error":
+            self = .commandError(
+                serverEpoch: try values.decode(String.self, forKey: .serverEpoch),
+                commandID: try values.decode(String.self, forKey: .commandID),
+                error: try values.decode(String.self, forKey: .error)
+            )
         case "error":
             self = .error(try values.decode(String.self, forKey: .error))
         default:
@@ -114,13 +128,20 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
         paneRef: String,
         lines: Int
     )
+    case sendText(commandID: String, paneID: String, paneRef: String, text: String)
+    case sendKeys(commandID: String, paneID: String, paneRef: String, keys: [String])
+    case action(commandID: String, paneID: String, paneRef: String, action: String)
 
     private enum CodingKeys: String, CodingKey {
         case type
         case subscriptionID = "subscription_id"
         case paneID = "pane_id"
         case paneRef = "pane_ref"
+        case commandID = "command_id"
         case lines
+        case text
+        case keys
+        case action
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -132,6 +153,24 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
             try values.encode(paneID, forKey: .paneID)
             try values.encode(paneRef, forKey: .paneRef)
             try values.encode(lines, forKey: .lines)
+        case let .sendText(commandID, paneID, paneRef, text):
+            try values.encode("send_text", forKey: .type)
+            try values.encode(commandID, forKey: .commandID)
+            try values.encode(paneID, forKey: .paneID)
+            try values.encode(paneRef, forKey: .paneRef)
+            try values.encode(text, forKey: .text)
+        case let .sendKeys(commandID, paneID, paneRef, keys):
+            try values.encode("send_keys", forKey: .type)
+            try values.encode(commandID, forKey: .commandID)
+            try values.encode(paneID, forKey: .paneID)
+            try values.encode(paneRef, forKey: .paneRef)
+            try values.encode(keys, forKey: .keys)
+        case let .action(commandID, paneID, paneRef, action):
+            try values.encode("action", forKey: .type)
+            try values.encode(commandID, forKey: .commandID)
+            try values.encode(paneID, forKey: .paneID)
+            try values.encode(paneRef, forKey: .paneRef)
+            try values.encode(action, forKey: .action)
         }
     }
 }
