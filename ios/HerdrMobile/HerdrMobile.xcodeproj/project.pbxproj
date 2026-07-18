@@ -16,6 +16,7 @@
 		A10000000000000000000008 /* NativeProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* NativeProtocol.swift */; };
 		A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* NetworkWebSocketConnection.swift */; };
 		A10000000000000000000010 /* PaneExperiencePrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* PaneExperiencePrototype.swift */; };
+		A10000000000000000000011 /* PaneSupervisionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* PaneSupervisionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		B10000000000000000000009 /* NativeProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProtocol.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* NetworkWebSocketConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkWebSocketConnection.swift; sourceTree = "<group>"; };
 		B10000000000000000000011 /* PaneExperiencePrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneExperiencePrototype.swift; sourceTree = "<group>"; };
+		B10000000000000000000012 /* PaneSupervisionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneSupervisionView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +57,7 @@
 			children = (
 				B10000000000000000000001 /* HerdrMobileApp.swift */,
 				B10000000000000000000002 /* RootView.swift */,
+				B10000000000000000000012 /* PaneSupervisionView.swift */,
 				D10000000000000000000003 /* Core */,
 				D10000000000000000000005 /* UIPrototype */,
 			);
@@ -159,6 +162,7 @@
 				A10000000000000000000008 /* NativeProtocol.swift in Sources */,
 				A10000000000000000000009 /* NetworkWebSocketConnection.swift in Sources */,
 				A10000000000000000000010 /* PaneExperiencePrototype.swift in Sources */,
+				A10000000000000000000011 /* PaneSupervisionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
