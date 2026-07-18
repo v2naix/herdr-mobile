@@ -183,7 +183,7 @@ node --test tests/test_reconnect_policy.js
 (cd ios/HerdrMobile && swift run HerdrMobileCoreTests)
 ```
 
-The test seams are the adapter's public interface, protocol validation functions, HTTP/WebSocket authentication boundaries, and the native client's top-level state/action interface. The `<script>` example in test output proves that terminal text enters neither logs nor server-rendered HTML. At runtime, the frontend uses `textContent`. Automated RC evidence, the Safari PWA smoke procedure, target-iPhone checklist, and blocker rules are recorded in [`docs/release/ios-0.1.0-rc.2.md`](docs/release/ios-0.1.0-rc.2.md).
+The test seams are the adapter's public interface, protocol validation functions, HTTP/WebSocket authentication boundaries, and the native client's top-level state/action interface. The `<script>` example in test output proves that terminal text enters neither logs nor server-rendered HTML. At runtime, the frontend uses `textContent`. Automated RC evidence, the Safari PWA smoke procedure, target-iPhone checklist, and blocker rules are recorded in [`docs/release/ios-0.1.0-rc.3.md`](docs/release/ios-0.1.0-rc.3.md).
 
 ## Project layout
 

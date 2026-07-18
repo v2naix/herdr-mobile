@@ -36,4 +36,4 @@ cd ios/HerdrMobile
 swift run HerdrMobileCoreTests
 ```
 
-候选版本的完整自动化命令、Safari PWA smoke 步骤、目标 iPhone 验收清单及发布阻断规则见 [`../../docs/release/ios-0.1.0-rc.2.md`](../../docs/release/ios-0.1.0-rc.2.md)。命令行检查不能替代完整 Xcode 26 和目标 iPhone 验收。
+候选版本的完整自动化命令、Safari PWA smoke 步骤、目标 iPhone 验收清单及发布阻断规则见 [`../../docs/release/ios-0.1.0-rc.3.md`](../../docs/release/ios-0.1.0-rc.3.md)。命令行检查不能替代完整 Xcode 26 和目标 iPhone 验收。
