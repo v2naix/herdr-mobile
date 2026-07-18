@@ -7,12 +7,15 @@ public enum AppScreen: Equatable, Sendable {
 }
 
 public enum NativeConnectionState: Equatable, Sendable {
-    case disconnected
     case connecting
     case online
+    case reconnecting
     case offline
+    case suspended
+    case authenticationRequired
+    case tlsFailure
     case incompatibleProtocol
-    case failed
+    case backendUnavailable
 }
 
 public enum ReaderMode: Equatable, Sendable {
@@ -78,6 +81,7 @@ public struct AppViewState: Equatable, Sendable {
     public var connection: NativeConnectionState
     public var panes: [AgentPane]
     public var selectedPane: AgentPane?
+    public var selectedPaneIsStale: Bool
     public var outputText: String
     public var readerMode: ReaderMode
     public var hasPendingOutput: Bool
@@ -88,6 +92,10 @@ public struct AppViewState: Equatable, Sendable {
     public var command: CommandViewState?
     public var successFeedbackCount: Int
     public var warningFeedbackCount: Int
+    public var retryCount: Int
+    public var lastSynchronization: Date?
+    public var serverEpoch: String?
+    public var protocolVersion: Int?
 
     public init(
         screen: AppScreen = .setup,
@@ -95,9 +103,10 @@ public struct AppViewState: Equatable, Sendable {
         token: String = "",
         error: String? = nil,
         isWorking: Bool = false,
-        connection: NativeConnectionState = .disconnected,
+        connection: NativeConnectionState = .offline,
         panes: [AgentPane] = [],
         selectedPane: AgentPane? = nil,
+        selectedPaneIsStale: Bool = true,
         outputText: String = "",
         readerMode: ReaderMode = .following,
         hasPendingOutput: Bool = false,
@@ -107,7 +116,11 @@ public struct AppViewState: Equatable, Sendable {
         replyError: String? = nil,
         command: CommandViewState? = nil,
         successFeedbackCount: Int = 0,
-        warningFeedbackCount: Int = 0
+        warningFeedbackCount: Int = 0,
+        retryCount: Int = 0,
+        lastSynchronization: Date? = nil,
+        serverEpoch: String? = nil,
+        protocolVersion: Int? = nil
     ) {
         self.screen = screen
         self.origin = origin
@@ -117,6 +130,7 @@ public struct AppViewState: Equatable, Sendable {
         self.connection = connection
         self.panes = panes
         self.selectedPane = selectedPane
+        self.selectedPaneIsStale = selectedPaneIsStale
         self.outputText = outputText
         self.readerMode = readerMode
         self.hasPendingOutput = hasPendingOutput
@@ -127,6 +141,10 @@ public struct AppViewState: Equatable, Sendable {
         self.command = command
         self.successFeedbackCount = successFeedbackCount
         self.warningFeedbackCount = warningFeedbackCount
+        self.retryCount = retryCount
+        self.lastSynchronization = lastSynchronization
+        self.serverEpoch = serverEpoch
+        self.protocolVersion = protocolVersion
     }
 }
 
@@ -182,6 +200,12 @@ private enum CommandIntent {
     case quick(QuickCommand)
 }
 
+private struct DesiredSubscription {
+    let paneID: String
+    let paneRef: String
+    let lines: Int
+}
+
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public private(set) var state = AppViewState()
@@ -193,16 +217,25 @@ public final class AppModel: ObservableObject {
     private let liveConnection: NativeConnectionServing?
     private let identifier: @MainActor () -> String
     private let commandTimeout: Duration
+    private let jitter: @MainActor () -> Double
+    private let retrySleep: @MainActor (Duration) async throws -> Void
+    private let now: @MainActor () -> Date
     private var nativeSession: NativeSession?
     private var connectionTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    private var connectionGeneration = 0
+    private var authenticationRecoveryUsed = false
     private var serverEpoch: String?
     private var paneRevision = 0
     private var subscriptionID: String?
+    private var desiredSubscription: DesiredSubscription?
+    private var awaitingAuthoritativePaneSnapshot = false
     private var outputRevision = 0
     private var pendingOutputText: String?
     private var pendingCommandIntent: CommandIntent?
     private var commandTimeoutTask: Task<Void, Never>?
     private var commandNoticeTask: Task<Void, Never>?
+    private var isForeground = true
 
     @_spi(Testing) public init(
         sessions: NativeSessionServing,
@@ -210,7 +243,12 @@ public final class AppModel: ObservableObject {
         configuration: OriginPersisting,
         liveConnection: NativeConnectionServing? = nil,
         identifier: @escaping @MainActor () -> String = { UUID().uuidString },
-        commandTimeout: Duration = .seconds(10)
+        commandTimeout: Duration = .seconds(10),
+        jitter: @escaping @MainActor () -> Double = { Double.random(in: 0...1) },
+        retrySleep: @escaping @MainActor (Duration) async throws -> Void = { delay in
+            try await Task.sleep(for: delay)
+        },
+        now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.sessions = sessions
         self.credentials = credentials
@@ -218,6 +256,12 @@ public final class AppModel: ObservableObject {
         self.liveConnection = liveConnection
         self.identifier = identifier
         self.commandTimeout = commandTimeout
+        self.jitter = jitter
+        self.retrySleep = retrySleep
+        self.now = now
+        self.liveConnection?.pathEventHandler = { [weak self] event in
+            self?.handlePathEvent(event)
+        }
     }
 
     public func start() async {
@@ -229,20 +273,143 @@ public final class AppModel: ObservableObject {
                 state.isWorking = false
                 return
             }
+            guard isForeground else {
+                state = AppViewState(
+                    screen: .configured,
+                    origin: origin,
+                    connection: .suspended
+                )
+                return
+            }
             let session = try await sessions.exchange(origin: origin, bootstrapToken: token)
             nativeSession = session
             state = AppViewState(
                 screen: .configured,
                 origin: origin,
-                connection: liveConnection == nil ? .disconnected : .connecting
+                connection: liveConnection == nil
+                    ? .offline
+                    : (isForeground ? .connecting : .suspended)
             )
             beginLiveConnection(origin: origin, sessionToken: session.token)
         } catch {
             if error as? NativeSessionError == .invalidCredentials {
                 try? credentials.deleteToken(for: origin)
+                state = AppViewState(
+                    origin: origin,
+                    error: message(for: error),
+                    connection: .authenticationRequired
+                )
+            } else {
+                state = AppViewState(
+                    screen: .configured,
+                    origin: origin,
+                    error: message(for: error),
+                    connection: connectionState(for: error)
+                )
             }
-            state = AppViewState(origin: origin, error: message(for: error))
         }
+    }
+
+    public func setSceneActive(_ active: Bool) {
+        guard active != isForeground else { return }
+        isForeground = active
+        if !active {
+            connectionGeneration += 1
+            connectionTask?.cancel()
+            connectionTask = nil
+            retryTask?.cancel()
+            retryTask = nil
+            liveConnection?.cancel()
+            markPendingCommandOutcomeUnknown()
+            state.connection = .suspended
+            state.selectedPaneIsStale = state.selectedPane != nil
+        } else if state.screen == .configured {
+            state.connection = .connecting
+            if let session = nativeSession, session.expiresAt > now() {
+                beginLiveConnection(origin: state.origin, sessionToken: session.token)
+            } else {
+                acquireSessionForForeground()
+            }
+        }
+    }
+
+    private func acquireSessionForForeground() {
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let bootstrapToken = try self.credentials.loadToken(for: self.state.origin) else {
+                    self.state.connection = .authenticationRequired
+                    self.state.error = "未找到 bootstrap token，请重新配置服务器。"
+                    return
+                }
+                let session = try await self.sessions.exchange(
+                    origin: self.state.origin,
+                    bootstrapToken: bootstrapToken
+                )
+                guard !Task.isCancelled, self.isForeground else { return }
+                self.nativeSession = session
+                self.beginLiveConnection(origin: self.state.origin, sessionToken: session.token)
+            } catch NativeSessionError.invalidCredentials {
+                self.state.connection = .authenticationRequired
+                self.state.error = "bootstrap token 已失效，请更换令牌。"
+            } catch NativeSessionError.tls {
+                self.state.connection = .tlsFailure
+                self.state.error = "无法验证服务器证书或主机名。请修复 HTTPS 配置后重试。"
+            } catch {
+                self.state.connection = .backendUnavailable
+                self.state.error = "无法获取前台会话。请检查后端后重试。"
+            }
+        }
+    }
+
+    public func retryNow() {
+        guard isForeground,
+              state.screen == .configured,
+              state.connection == .offline
+                || state.connection == .reconnecting
+                || state.connection == .backendUnavailable
+        else { return }
+        if let session = nativeSession, session.expiresAt > now() {
+            replaceLiveConnection(sessionToken: session.token)
+        } else {
+            state.connection = .connecting
+            acquireSessionForForeground()
+        }
+    }
+
+    private func handlePathEvent(_ event: NativePathEvent) {
+        guard isForeground, state.screen == .configured else { return }
+        switch event {
+        case .viabilityChanged(false):
+            connectionGeneration += 1
+            connectionTask?.cancel()
+            connectionTask = nil
+            retryTask?.cancel()
+            retryTask = nil
+            liveConnection?.cancel()
+            markPendingCommandOutcomeUnknown()
+            state.connection = .offline
+            state.selectedPaneIsStale = state.selectedPane != nil
+            state.error = "当前网络路径不可用；Agent 可能仍在运行。网络恢复后将重新连接。"
+        case .viabilityChanged(true):
+            if state.connection == .offline { retryNow() }
+        case .betterPathAvailable:
+            guard let session = nativeSession else { return }
+            replaceLiveConnection(sessionToken: session.token)
+        }
+    }
+
+    private func replaceLiveConnection(sessionToken: String) {
+        connectionGeneration += 1
+        connectionTask?.cancel()
+        connectionTask = nil
+        retryTask?.cancel()
+        retryTask = nil
+        liveConnection?.cancel()
+        markPendingCommandOutcomeUnknown()
+        state.connection = .reconnecting
+        beginLiveConnection(origin: state.origin, sessionToken: sessionToken)
     }
 
     public func updateOrigin(_ origin: String) {
@@ -286,7 +453,9 @@ public final class AppModel: ObservableObject {
             state = AppViewState(
                 screen: .configured,
                 origin: origin,
-                connection: liveConnection == nil ? .disconnected : .connecting
+                connection: liveConnection == nil
+                    ? .offline
+                    : (isForeground ? .connecting : .suspended)
             )
             beginLiveConnection(origin: origin, sessionToken: session.token)
         } catch {
@@ -294,19 +463,27 @@ public final class AppModel: ObservableObject {
             state = AppViewState(
                 origin: origin,
                 token: rejected ? "" : token,
-                error: message(for: error)
+                error: message(for: error),
+                connection: connectionState(for: error)
             )
         }
     }
 
     public func openPane(_ pane: AgentPane, lines: Int = 120) async {
-        guard state.panes.contains(pane), let liveConnection else { return }
+        guard state.panes.contains(pane) else { return }
         let boundedLines = max(1, min(lines, 300))
-        let newSubscriptionID = identifier()
         resetReader()
         state.selectedPane = pane
-        subscriptionID = newSubscriptionID
+        state.selectedPaneIsStale = state.connection != .online
+        desiredSubscription = DesiredSubscription(
+            paneID: pane.paneID, paneRef: pane.paneRef, lines: boundedLines
+        )
+        subscriptionID = nil
         outputRevision = 0
+        guard state.connection == .online, let liveConnection else { return }
+
+        let newSubscriptionID = identifier()
+        subscriptionID = newSubscriptionID
         do {
             try await liveConnection.send(.subscribe(
                 subscriptionID: newSubscriptionID,
@@ -315,13 +492,15 @@ public final class AppModel: ObservableObject {
                 lines: boundedLines
             ))
         } catch {
-            state.connection = .failed
-            state.error = "无法订阅 pane 输出。"
+            state.error = "无法订阅 pane 输出。请检查网络后重试。"
+            handleConnectionEnd(error: error)
         }
     }
 
     public func closePane() {
         state.selectedPane = nil
+        state.selectedPaneIsStale = true
+        desiredSubscription = nil
         resetReader()
         subscriptionID = nil
         outputRevision = 0
@@ -348,7 +527,7 @@ public final class AppModel: ObservableObject {
     }
 
     public func presentReplyEditor() {
-        guard state.selectedPane != nil else { return }
+        guard state.selectedPane != nil, !state.selectedPaneIsStale else { return }
         state.isReplyEditorPresented = true
     }
 
@@ -365,6 +544,7 @@ public final class AppModel: ObservableObject {
     public func sendReply() async {
         guard state.selectedPane != nil,
               state.connection == .online,
+              !state.selectedPaneIsStale,
               canStartNewCommand
         else { return }
         guard validateReply(state.replyDraft) else {
@@ -406,8 +586,11 @@ public final class AppModel: ObservableObject {
         let oldOrigin = configuration.loadOrigin() ?? state.origin
         let oldSession = nativeSession
 
+        connectionGeneration += 1
         connectionTask?.cancel()
         connectionTask = nil
+        retryTask?.cancel()
+        retryTask = nil
         commandTimeoutTask?.cancel()
         commandTimeoutTask = nil
         commandNoticeTask?.cancel()
@@ -431,26 +614,35 @@ public final class AppModel: ObservableObject {
     }
 
     private func beginLiveConnection(origin: String, sessionToken: String) {
-        guard let liveConnection else { return }
+        guard let liveConnection, isForeground else { return }
         markPendingCommandOutcomeUnknown()
         connectionTask?.cancel()
+        retryTask?.cancel()
+        retryTask = nil
+        connectionGeneration += 1
+        let generation = connectionGeneration
+        awaitingAuthoritativePaneSnapshot = true
+        subscriptionID = nil
+        outputRevision = 0
+        state.selectedPaneIsStale = state.selectedPane != nil
         let messages = liveConnection.open(origin: origin, sessionToken: sessionToken)
         connectionTask = Task { [weak self] in
             do {
                 for try await message in messages {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled,
+                          self?.connectionGeneration == generation
+                    else { return }
                     self?.accept(message)
                 }
-                if self?.state.connection != .incompatibleProtocol {
-                    self?.markPendingCommandOutcomeUnknown()
-                    self?.state.connection = .offline
-                }
+                guard !Task.isCancelled,
+                      self?.connectionGeneration == generation
+                else { return }
+                self?.handleConnectionEnd(error: nil)
             } catch {
-                if self?.state.connection != .incompatibleProtocol {
-                    self?.markPendingCommandOutcomeUnknown()
-                    self?.state.connection = .failed
-                    self?.state.error = "实时连接已断开。"
-                }
+                guard !Task.isCancelled,
+                      self?.connectionGeneration == generation
+                else { return }
+                self?.handleConnectionEnd(error: error)
             }
         }
     }
@@ -458,6 +650,7 @@ public final class AppModel: ObservableObject {
     private func accept(_ message: NativeServerMessage) {
         switch message {
         case let .hello(protocolVersion, newEpoch):
+            state.protocolVersion = protocolVersion
             guard protocolVersion == nativeProtocolVersion else {
                 state.connection = .incompatibleProtocol
                 state.error = "服务器协议不兼容，请升级客户端或服务器。"
@@ -467,18 +660,41 @@ public final class AppModel: ObservableObject {
             if serverEpoch != newEpoch {
                 markPendingCommandOutcomeUnknown()
                 serverEpoch = newEpoch
+                state.serverEpoch = newEpoch
                 paneRevision = 0
                 outputRevision = 0
                 pendingOutputText = nil
                 state.hasPendingOutput = false
-                state.panes = []
+                state.selectedPaneIsStale = state.selectedPane != nil
             }
         case let .paneSnapshot(messageEpoch, revision, panes):
-            guard messageEpoch == serverEpoch, revision > paneRevision else { return }
+            guard messageEpoch == serverEpoch,
+                  awaitingAuthoritativePaneSnapshot || revision > paneRevision
+            else { return }
             paneRevision = revision
+            let isFirstAuthoritativeSnapshot = awaitingAuthoritativePaneSnapshot
+            awaitingAuthoritativePaneSnapshot = false
             state.panes = panes
             state.connection = .online
+            retryTask?.cancel()
+            retryTask = nil
+            state.retryCount = 0
+            authenticationRecoveryUsed = false
+            state.lastSynchronization = now()
+            if let selected = state.selectedPane {
+                if let current = panes.first(where: {
+                    $0.paneID == selected.paneID && $0.paneRef == selected.paneRef
+                }) {
+                    state.selectedPane = current
+                    state.selectedPaneIsStale = false
+                } else {
+                    state.selectedPaneIsStale = true
+                }
+            }
             state.error = nil
+            if isFirstAuthoritativeSnapshot {
+                restoreDesiredSubscription(from: panes)
+            }
         case let .outputSnapshot(
             messageEpoch,
             messageSubscriptionID,
@@ -537,8 +753,126 @@ public final class AppModel: ObservableObject {
             )
             state.warningFeedbackCount += 1
             pendingCommandIntent = nil
-        case let .error(error):
-            state.error = error
+        case .error:
+            state.connection = .backendUnavailable
+            state.selectedPaneIsStale = state.selectedPane != nil
+            state.error = "后端或 herdr 当前不可用。请恢复服务后刷新。"
+        }
+    }
+
+    private func handleConnectionEnd(error: Error?) {
+        guard isForeground, state.connection != .incompatibleProtocol else { return }
+        markPendingCommandOutcomeUnknown()
+        state.selectedPaneIsStale = state.selectedPane != nil
+
+        switch error as? NativeConnectionError {
+        case .tls:
+            state.connection = .tlsFailure
+            state.error = "无法验证服务器证书或主机名。请修复 HTTPS 配置后重试。"
+        case .invalidMessage, .messageTooLarge, .invalidEndpoint:
+            state.connection = .incompatibleProtocol
+            state.error = "服务器协议不兼容，请升级客户端或服务器。"
+        case .authentication:
+            recoverAuthentication()
+        case .backendUnavailable:
+            state.connection = .backendUnavailable
+            state.error = "后端或 herdr 当前不可用，请恢复服务后刷新。"
+        case .transport, .none:
+            scheduleReconnect()
+        }
+    }
+
+    private func recoverAuthentication() {
+        guard !authenticationRecoveryUsed else {
+            state.connection = .authenticationRequired
+            state.error = "会话认证再次被拒绝，请更换 bootstrap token。"
+            return
+        }
+        authenticationRecoveryUsed = true
+        state.connection = .connecting
+        state.error = "会话已失效，正在安全地重新认证一次。"
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let bootstrapToken = try self.credentials.loadToken(for: self.state.origin) else {
+                    self.state.connection = .authenticationRequired
+                    self.state.error = "未找到 bootstrap token，请重新配置服务器。"
+                    return
+                }
+                let session = try await self.sessions.exchange(
+                    origin: self.state.origin,
+                    bootstrapToken: bootstrapToken
+                )
+                guard !Task.isCancelled, self.isForeground else { return }
+                self.nativeSession = session
+                self.beginLiveConnection(origin: self.state.origin, sessionToken: session.token)
+            } catch NativeSessionError.invalidCredentials {
+                self.state.connection = .authenticationRequired
+                self.state.error = "bootstrap token 已失效，请更换令牌。"
+            } catch NativeSessionError.tls {
+                self.state.connection = .tlsFailure
+                self.state.error = "无法验证服务器证书或主机名。请修复 HTTPS 配置后重试。"
+            } catch {
+                self.authenticationRecoveryUsed = false
+                self.state.connection = .backendUnavailable
+                self.state.error = "重新认证时无法访问后端；请检查服务后刷新。"
+            }
+        }
+    }
+
+    private func scheduleReconnect() {
+        guard isForeground, nativeSession != nil else {
+            state.connection = .offline
+            return
+        }
+        state.connection = .reconnecting
+        state.error = "控制连接已断开；Agent 可能仍在运行。正在重试。"
+        state.retryCount += 1
+        let attempt = state.retryCount
+        let base = pow(2.0, Double(min(attempt - 1, 5)))
+        let seconds = min(30.0, base * (1.0 + max(0, min(jitter(), 1)) * 0.25))
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            do {
+                try await self?.retrySleep(.seconds(seconds))
+                guard !Task.isCancelled,
+                      let self,
+                      self.isForeground
+                else { return }
+                if let session = self.nativeSession, session.expiresAt > self.now() {
+                    self.beginLiveConnection(origin: self.state.origin, sessionToken: session.token)
+                } else {
+                    self.acquireSessionForForeground()
+                }
+            } catch {}
+        }
+    }
+
+    private func restoreDesiredSubscription(from panes: [AgentPane]) {
+        guard let desiredSubscription,
+              panes.contains(where: {
+                  $0.paneID == desiredSubscription.paneID
+                      && $0.paneRef == desiredSubscription.paneRef
+              }),
+              let liveConnection
+        else { return }
+        let newSubscriptionID = identifier()
+        subscriptionID = newSubscriptionID
+        outputRevision = 0
+        Task { [weak self] in
+            do {
+                try await liveConnection.send(.subscribe(
+                    subscriptionID: newSubscriptionID,
+                    paneID: desiredSubscription.paneID,
+                    paneRef: desiredSubscription.paneRef,
+                    lines: desiredSubscription.lines
+                ))
+            } catch {
+                guard self?.subscriptionID == newSubscriptionID else { return }
+                self?.state.error = "无法恢复 pane 输出，请检查网络后重试。"
+                self?.handleConnectionEnd(error: error)
+            }
         }
     }
 
@@ -563,6 +897,7 @@ public final class AppModel: ObservableObject {
         guard let pane = state.selectedPane,
               let liveConnection,
               state.connection == .online,
+              !state.selectedPaneIsStale,
               isRetry ? state.command?.status == .outcomeUnknown : canStartNewCommand
         else { return }
         commandNoticeTask?.cancel()
@@ -700,6 +1035,16 @@ public final class AppModel: ObservableObject {
     private func markPendingCommandOutcomeUnknown() {
         guard let command = state.command, command.status == .pending else { return }
         markCommandOutcomeUnknown(commandID: command.commandID)
+    }
+
+    private func connectionState(for error: Error) -> NativeConnectionState {
+        switch error as? NativeSessionError {
+        case .invalidCredentials: .authenticationRequired
+        case .tls: .tlsFailure
+        case .invalidResponse: .incompatibleProtocol
+        case .transport: .backendUnavailable
+        case nil: .offline
+        }
     }
 
     private func message(for error: Error) -> String {

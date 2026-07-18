@@ -98,6 +98,7 @@ private struct SetupView: View {
 
 private struct ConfiguredView: View {
     @ObservedObject var model: AppModel
+    @State private var isDiagnosticsPresented = false
 
     var body: some View {
         List {
@@ -108,6 +109,9 @@ private struct ConfiguredView: View {
                     Text(error)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                if canRetryConnection {
+                    Button("立即重试") { model.retryNow() }
                 }
             }
 
@@ -151,6 +155,9 @@ private struct ConfiguredView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("诊断信息", systemImage: "stethoscope") {
+                        isDiagnosticsPresented = true
+                    }
                     Button("更换服务器", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") {
                         model.requestServerReplacement()
                     }
@@ -162,16 +169,47 @@ private struct ConfiguredView: View {
                 }
             }
         }
+        .sheet(isPresented: $isDiagnosticsPresented) {
+            NavigationStack {
+                List {
+                    LabeledContent("服务器", value: model.state.origin)
+                    LabeledContent("状态", value: connectionLabel)
+                    LabeledContent("重试次数", value: String(model.state.retryCount))
+                    if let date = model.state.lastSynchronization {
+                        LabeledContent("上次同步", value: date.formatted())
+                    }
+                    if let epoch = model.state.serverEpoch {
+                        LabeledContent("服务端 epoch", value: epoch)
+                    }
+                    if let version = model.state.protocolVersion {
+                        LabeledContent("协议版本", value: String(version))
+                    }
+                    if let error = model.state.error {
+                        LabeledContent("最近错误", value: error)
+                    }
+                }
+                .navigationTitle("诊断信息")
+            }
+        }
+    }
+
+    private var canRetryConnection: Bool {
+        model.state.connection == .offline
+            || model.state.connection == .reconnecting
+            || model.state.connection == .backendUnavailable
     }
 
     private var connectionLabel: String {
         switch model.state.connection {
-        case .disconnected: "未连接"
         case .connecting: "正在连接"
         case .online: "在线"
-        case .offline: "连接已断开"
+        case .reconnecting: "正在重新连接"
+        case .offline: "离线"
+        case .suspended: "已暂停（仅前台连接）"
+        case .authenticationRequired: "需要重新认证"
+        case .tlsFailure: "TLS 验证失败"
         case .incompatibleProtocol: "协议不兼容"
-        case .failed: "连接失败"
+        case .backendUnavailable: "后端不可用"
         }
     }
 
@@ -239,6 +277,20 @@ private struct PaneDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .padding()
                 .accessibilityIdentifier("return-to-bottom")
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.state.selectedPaneIsStale || model.state.connection != .online {
+                Label(
+                    model.state.selectedPaneIsStale
+                        ? "此 pane 信息尚未重新验证，内容为旧快照，操作已禁用。"
+                        : "控制连接尚未同步，Agent 可能仍在运行。",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.footnote)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(.bar)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -372,7 +424,7 @@ private struct PaneDetailView: View {
                     Button("明确重试") {
                         Task { await model.retryCommand() }
                     }
-                    .disabled(model.state.connection != .online)
+                    .disabled(model.state.connection != .online || model.state.selectedPaneIsStale)
                 }
             }
         }
@@ -395,6 +447,7 @@ private struct PaneDetailView: View {
 
     private var canSendCommand: Bool {
         model.state.connection == .online
+            && !model.state.selectedPaneIsStale
             && model.state.command?.status != .pending
             && model.state.command?.status != .outcomeUnknown
     }
@@ -442,7 +495,7 @@ private struct ReplyEditor: View {
                             Button("明确重试") {
                                 Task { await model.retryCommand() }
                             }
-                            .disabled(model.state.connection != .online)
+                            .disabled(model.state.connection != .online || model.state.selectedPaneIsStale)
                         }
                         .font(.footnote)
                         .foregroundStyle(.orange)
@@ -463,6 +516,7 @@ private struct ReplyEditor: View {
                     }
                     .disabled(
                         model.state.connection != .online
+                        || model.state.selectedPaneIsStale
                         || model.state.command?.status == .pending
                         || model.state.command?.status == .outcomeUnknown
                     )

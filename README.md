@@ -161,6 +161,8 @@ WebSocket 只接受以下严格对象（未知字段会被拒绝）：
 
 浏览器连接继续使用上述对象和 Cookie + 精确 Origin 认证。原生连接改用短期 bearer 握手，服务端先发送包含 `protocol_version + server_epoch` 的 `hello`；原生 `subscribe` 还必须包含 `subscription_id`。`pane_snapshot` 和 `output_snapshot` 都是带 epoch、身份和单调 revision 的完整替换快照。原生文本、按键和固定动作还必须包含 `command_id`；服务端执行完成后返回相关联的确认或错误，并在当前 epoch 内通过有界内存缓存返回已知命令结果而不重复执行。
 
+原生客户端只在前台连接。后台会暂停连接和重试并保留内存中的旧快照；恢复前台或网络路径变化后，客户端先同步权威 pane 列表并重新校验 `pane_id + pane_ref`，再恢复期望订阅。身份缺失或变化不会自动跳转或附着到复用 ID，未确认命令也不会在恢复过程中自动重发。
+
 客户端不能发送 `agent_event`，也没有相应 API。状态只来自服务端轮询。最多 8 个 WS 连接，每连接 10 秒 30 条消息，单消息最多 8 KiB；Uvicorn 总并发上限为 32。命令超时 8 秒。
 
 ## 威胁模型

@@ -19,6 +19,15 @@ struct AppModelTests {
         try await rejectedCredentialsKeepOriginAndClearToken()
         try await passcodeStorageFailureDoesNotAcceptConfiguration()
         try await coldLaunchExchangesStoredBootstrapToken()
+        try await backgroundLaunchDoesNotStartMonitoring()
+        try await backgroundSuspendsWithoutDiscardingVisibleState()
+        try await foregroundResubscribesOnlyAfterAuthoritativeIdentityMatch()
+        try await foregroundRefreshesAnExpiredSessionBeforeConnecting()
+        try await reusedPaneIDRemainsVisibleAndDisabled()
+        try await transientFailuresUseCappedForegroundBackoff()
+        try await authenticationRejectionGetsOnlyOneSilentRecovery()
+        try await betterNetworkPathReplacesConnectionWithoutResendingCommand()
+        try await nonRetryableAndBackendFailuresAreActionable()
         try await logoutClearsLocalAccessWhenRevocationFails()
         try await serverReplacementRequiresConfirmation()
         try await livePaneSnapshotsDriveVisibleNavigationState()
@@ -37,7 +46,7 @@ struct AppModelTests {
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 23 passed")
+        print("HerdrMobileCoreTests: 32 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -114,6 +123,200 @@ struct AppModelTests {
 
         try check(model.state.screen == .configured, "valid cold launch should configure the app")
         try check(sessions.exchanges == [.init(origin: "https://mac.example", token: "stored-bootstrap")], "cold launch should exchange the Keychain token")
+    }
+
+    static func backgroundLaunchDoesNotStartMonitoring() async throws {
+        let live = FakeLiveConnection()
+        let sessions = FakeSessions()
+        let credentials = MemoryCredentials()
+        try credentials.saveToken("bootstrap", for: "https://mac.example")
+        let model = AppModel(
+            sessions: sessions,
+            credentials: credentials,
+            configuration: MemoryConfiguration(origin: "https://mac.example"),
+            liveConnection: live
+        )
+        model.setSceneActive(false)
+
+        await model.start()
+
+        try check(model.state.connection == .suspended, "a configured background launch should remain suspended")
+        try check(sessions.exchanges.isEmpty, "a background launch should defer session acquisition")
+        try check(live.openCount == 0, "a background launch must not start monitoring")
+    }
+
+    static func backgroundSuspendsWithoutDiscardingVisibleState() async throws {
+        let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1, text: "retained output"
+        ))
+        await settle()
+
+        model.setSceneActive(false)
+        await settle()
+
+        try check(model.state.connection == .suspended, "background should expose the canonical suspended state")
+        try check(model.state.panes == [pane], "background should retain the last pane list as stale")
+        try check(model.state.selectedPane == pane, "background must not pop the selected pane")
+        try check(model.state.outputText == "retained output", "background must retain visible terminal output in memory")
+        try check(model.state.selectedPaneIsStale, "background should disable operations against stale identity")
+        try check(live.cancelCount == 1, "background should cancel foreground monitoring")
+    }
+
+    static func foregroundResubscribesOnlyAfterAuthoritativeIdentityMatch() async throws {
+        let (model, live, pane) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "subscription-2"]
+        )
+        model.setSceneActive(false)
+        model.setSceneActive(true)
+        await settle()
+
+        try check(live.sent.count == 1, "foreground must not subscribe before a fresh pane snapshot")
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        await settle()
+        try check(live.sent.count == 1, "hello alone is not authoritative pane identity")
+
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 2, panes: [pane]))
+        await settle()
+
+        try check(live.sent.last == .subscribe(
+            subscriptionID: "subscription-2", paneID: pane.paneID,
+            paneRef: pane.paneRef, lines: 120
+        ), "a matching authoritative identity should restore the desired subscription")
+        try check(!model.state.selectedPaneIsStale, "identity-safe restoration should re-enable operations")
+    }
+
+    static func foregroundRefreshesAnExpiredSessionBeforeConnecting() async throws {
+        let clock = DateBox(Date(timeIntervalSince1970: 1_000))
+        let sessions = FakeSessions(sessionExpiry: Date(timeIntervalSince1970: 1_100))
+        let credentials = MemoryCredentials()
+        try credentials.saveToken("bootstrap", for: "https://mac.example")
+        let live = FakeLiveConnection()
+        let model = AppModel(
+            sessions: sessions,
+            credentials: credentials,
+            configuration: MemoryConfiguration(origin: "https://mac.example"),
+            liveConnection: live,
+            now: clock.now
+        )
+        await model.start()
+        model.setSceneActive(false)
+        clock.value = Date(timeIntervalSince1970: 1_200)
+
+        model.setSceneActive(true)
+        await settle()
+
+        try check(sessions.exchanges.count == 2, "foreground should refresh an expired in-memory session")
+        try check(live.openCount == 2, "foreground should connect only after obtaining the replacement session")
+    }
+
+    static func reusedPaneIDRemainsVisibleAndDisabled() async throws {
+        let (model, live, original) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "unused-command"]
+        )
+        model.setSceneActive(false)
+        model.setSceneActive(true)
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-2"))
+        let reused = AgentPane(
+            paneID: original.paneID, paneRef: "different-terminal", title: "Other",
+            status: "working", cwd: "/other", workspaceID: "w2"
+        )
+        live.emit(.paneSnapshot(serverEpoch: "epoch-2", revision: 1, panes: [reused]))
+        await settle()
+
+        try check(model.state.selectedPane == original, "a reused pane ID must not replace the visible stale pane")
+        try check(model.state.selectedPaneIsStale, "changed pane_ref should disable detail operations")
+        try check(live.sent.count == 1, "identity mismatch must never resubscribe")
+        await model.sendQuickCommand(.enter)
+        try check(live.sent.count == 1, "identity mismatch must never receive a command")
+    }
+
+    static func transientFailuresUseCappedForegroundBackoff() async throws {
+        let live = FakeLiveConnection()
+        let retryClock = RetryRecorder()
+        let model = configuredModel(
+            live: live,
+            jitter: { 0 },
+            retrySleep: retryClock.sleep
+        )
+        await model.start()
+
+        for _ in 0..<7 {
+            live.finish(throwing: NativeConnectionError.transport)
+            await settle()
+        }
+
+        try check(
+            retryClock.delays == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16), .seconds(30), .seconds(30)],
+            "foreground retries should use capped exponential backoff"
+        )
+        try check(model.state.connection == .reconnecting, "transient failure should remain in reconnecting state until synchronization")
+        try check(model.state.retryCount == 7, "diagnostics should expose the bounded retry attempt count")
+    }
+
+    static func authenticationRejectionGetsOnlyOneSilentRecovery() async throws {
+        let live = FakeLiveConnection()
+        let sessions = FakeSessions()
+        let credentials = MemoryCredentials()
+        try credentials.saveToken("bootstrap", for: "https://mac.example")
+        let model = AppModel(
+            sessions: sessions,
+            credentials: credentials,
+            configuration: MemoryConfiguration(origin: "https://mac.example"),
+            liveConnection: live
+        )
+        await model.start()
+
+        live.finish(throwing: NativeConnectionError.authentication)
+        await settle()
+        try check(sessions.exchanges.count == 2, "explicit rejection should perform one silent bootstrap exchange")
+        try check(live.openCount == 2, "successful silent exchange should reconnect with the replacement session")
+
+        live.finish(throwing: NativeConnectionError.authentication)
+        await settle()
+        try check(model.state.connection == .authenticationRequired, "a repeated rejection should require owner action")
+        try check(sessions.exchanges.count == 2, "authentication recovery must never loop")
+    }
+
+    static func betterNetworkPathReplacesConnectionWithoutResendingCommand() async throws {
+        let (model, live, _) = await modelWithOpenPane(
+            identifiers: ["subscription-1", "command-1", "subscription-2"]
+        )
+        model.presentReplyEditor()
+        model.updateReplyDraft("可能已发送")
+        await model.sendReply()
+        let sentBeforePathChange = live.sent.count
+
+        live.emitPath(.betterPathAvailable)
+        await settle()
+
+        try check(model.state.connection == .reconnecting, "a better path should safely replace the foreground connection")
+        try check(model.state.command?.status == .outcomeUnknown, "path replacement should preserve an in-flight command as unknown")
+        try check(live.sent.count == sentBeforePathChange, "path replacement must never resend a command")
+        try check(live.openCount == 2, "a better path should establish one fresh connection")
+    }
+
+    static func nonRetryableAndBackendFailuresAreActionable() async throws {
+        let tlsLive = FakeLiveConnection()
+        let tlsModel = configuredModel(live: tlsLive)
+        await tlsModel.start()
+        tlsLive.finish(throwing: NativeConnectionError.tls)
+        await settle()
+
+        try check(tlsModel.state.connection == .tlsFailure, "TLS failure should be a canonical non-retryable state")
+        let tlsOpenCount = tlsLive.openCount
+        tlsModel.retryNow()
+        try check(tlsLive.openCount == tlsOpenCount, "TLS failure must offer no automatic or unsafe bypass")
+
+        let backendLive = FakeLiveConnection()
+        let backendModel = configuredModel(live: backendLive)
+        await backendModel.start()
+        backendLive.finish(throwing: NativeConnectionError.backendUnavailable)
+        await settle()
+        try check(backendModel.state.connection == .backendUnavailable, "backend failure should be distinct from transport loss")
+        backendModel.retryNow()
+        try check(backendLive.openCount == 2, "backend failure should offer a safe explicit refresh")
     }
 
     static func logoutClearsLocalAccessWhenRevocationFails() async throws {
@@ -581,7 +784,11 @@ struct AppModelTests {
     private static func configuredModel(
         live: FakeLiveConnection,
         identifiers: [String] = [],
-        commandTimeout: Duration = .seconds(10)
+        commandTimeout: Duration = .seconds(10),
+        jitter: @escaping @MainActor () -> Double = { 0.5 },
+        retrySleep: @escaping @MainActor (Duration) async throws -> Void = { delay in
+            try await Task.sleep(for: delay)
+        }
     ) -> AppModel {
         let credentials = MemoryCredentials()
         try! credentials.saveToken("bootstrap", for: "https://mac.example")
@@ -591,7 +798,9 @@ struct AppModelTests {
             configuration: MemoryConfiguration(origin: "https://mac.example"),
             liveConnection: live,
             identifier: IdentifierSequence(identifiers).next,
-            commandTimeout: commandTimeout
+            commandTimeout: commandTimeout,
+            jitter: jitter,
+            retrySleep: retrySleep
         )
     }
 
@@ -626,13 +835,16 @@ private final class IdentifierSequence {
 
 @MainActor
 private final class FakeLiveConnection: NativeConnectionServing {
+    var pathEventHandler: (@MainActor (NativePathEvent) -> Void)?
     private var continuation: AsyncThrowingStream<NativeServerMessage, Error>.Continuation?
     var sent: [NativeClientMessage] = []
     var cancelCount = 0
+    var openCount = 0
     var sendError: Error?
 
     func open(origin: String, sessionToken: String) -> AsyncThrowingStream<NativeServerMessage, Error> {
-        AsyncThrowingStream { continuation = $0 }
+        openCount += 1
+        return AsyncThrowingStream { continuation = $0 }
     }
 
     func send(_ message: NativeClientMessage) async throws {
@@ -649,8 +861,25 @@ private final class FakeLiveConnection: NativeConnectionServing {
         continuation?.yield(message)
     }
 
-    func finish() {
-        continuation?.finish()
+    func emitPath(_ event: NativePathEvent) {
+        pathEventHandler?(event)
+    }
+
+    func finish(throwing error: Error? = nil) {
+        if let error {
+            continuation?.finish(throwing: error)
+        } else {
+            continuation?.finish()
+        }
+    }
+}
+
+@MainActor
+private final class RetryRecorder {
+    var delays: [Duration] = []
+
+    func sleep(for delay: Duration) async throws {
+        delays.append(delay)
     }
 }
 
@@ -665,22 +894,39 @@ private final class FakeSessions: NativeSessionServing {
     var revocations: [(origin: String, token: String)] = []
     var exchangeError: NativeSessionError?
     var revokeError: NativeSessionError?
+    var sessionExpiry: Date?
 
-    init(exchangeError: NativeSessionError? = nil, revokeError: NativeSessionError? = nil) {
+    init(
+        exchangeError: NativeSessionError? = nil,
+        revokeError: NativeSessionError? = nil,
+        sessionExpiry: Date? = nil
+    ) {
         self.exchangeError = exchangeError
         self.revokeError = revokeError
+        self.sessionExpiry = sessionExpiry
     }
 
     func exchange(origin: String, bootstrapToken: String) async throws -> NativeSession {
         exchanges.append(.init(origin: origin, token: bootstrapToken))
         if let exchangeError { throw exchangeError }
-        return NativeSession(token: "short-lived", expiresAt: Date().addingTimeInterval(43_200))
+        return NativeSession(
+            token: "short-lived",
+            expiresAt: sessionExpiry ?? Date().addingTimeInterval(43_200)
+        )
     }
 
     func revoke(origin: String, sessionToken: String) async throws {
         revocations.append((origin, sessionToken))
         if let revokeError { throw revokeError }
     }
+}
+
+@MainActor
+private final class DateBox {
+    var value: Date
+
+    init(_ value: Date) { self.value = value }
+    func now() -> Date { value }
 }
 
 @MainActor

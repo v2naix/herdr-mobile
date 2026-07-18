@@ -2,10 +2,12 @@ import Foundation
 
 let nativeProtocolVersion = 1
 
-enum NativeConnectionError: Error, Equatable, Sendable {
+@_spi(Testing) public enum NativeConnectionError: Error, Equatable, Sendable {
     case invalidEndpoint
+    case authentication
     case tls
     case transport
+    case backendUnavailable
     case messageTooLarge
     case invalidMessage
 }
@@ -175,8 +177,15 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
     }
 }
 
+@_spi(Testing) public enum NativePathEvent: Equatable, Sendable {
+    case viabilityChanged(Bool)
+    case betterPathAvailable
+}
+
 @_spi(Testing) @MainActor
 public protocol NativeConnectionServing: AnyObject {
+    var pathEventHandler: (@MainActor (NativePathEvent) -> Void)? { get set }
+
     func open(
         origin: String,
         sessionToken: String

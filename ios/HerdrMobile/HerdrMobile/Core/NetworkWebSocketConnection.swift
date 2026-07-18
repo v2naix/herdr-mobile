@@ -8,6 +8,7 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
 
     private var connection: NetworkConnection<WebSocket>?
     private var receiveTask: Task<Void, Never>?
+    var pathEventHandler: (@MainActor (NativePathEvent) -> Void)?
 
     init() {}
 
@@ -35,6 +36,13 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
             .autoReplyPing(true)
             .maximumMessageSize(Self.maximumMessageSize)
         }
+        connection.onViabilityUpdate { [weak self] _, isViable in
+            self?.pathEventHandler?(.viabilityChanged(isViable))
+        }
+        connection.onBetterPathUpdate { [weak self] _, hasBetterPath in
+            guard hasBetterPath else { return }
+            self?.pathEventHandler?(.betterPathAvailable)
+        }
         self.connection = connection
 
         return AsyncThrowingStream { continuation in
@@ -43,7 +51,21 @@ final class NetworkWebSocketConnection: NativeConnectionServing {
                     for try await message in connection.messages {
                         switch message.metadata.opcode {
                         case .close:
-                            continuation.finish()
+                            switch message.metadata.closeCode {
+                            case .protocolCode(.policyViolation):
+                                continuation.finish(throwing: NativeConnectionError.authentication)
+                            case .applicationCode(1013), .privateCode(1013),
+                                 .protocolCode(.internalServerError):
+                                continuation.finish(throwing: NativeConnectionError.backendUnavailable)
+                            case .protocolCode(.tlsHandshake):
+                                continuation.finish(throwing: NativeConnectionError.tls)
+                            case .protocolCode(.protocolError), .protocolCode(.unsupportedData):
+                                continuation.finish(throwing: NativeConnectionError.invalidMessage)
+                            case .protocolCode(.messageTooBig):
+                                continuation.finish(throwing: NativeConnectionError.messageTooLarge)
+                            default:
+                                continuation.finish()
+                            }
                             return
                         case .ping, .pong:
                             continue

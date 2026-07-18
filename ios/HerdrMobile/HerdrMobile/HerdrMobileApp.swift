@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct HerdrMobileApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AppModel(
         sessions: NativeSessionHTTPClient(),
         credentials: KeychainCredentialStore(),
@@ -14,6 +15,10 @@ struct HerdrMobileApp: App {
             RootView(model: model)
                 .task {
                     await model.start()
+                    model.setSceneActive(scenePhase == .active)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    model.setSceneActive(phase == .active)
                 }
         }
     }
