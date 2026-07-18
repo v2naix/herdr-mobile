@@ -178,7 +178,7 @@ private struct TerminalFirstPrototype: View {
                 .padding(.vertical, 11)
                 Divider().overlay(.white.opacity(0.15))
                 ScrollView {
-                    Text(demoOutput)
+                    Text(selectedOutput)
                         .font(.system(.subheadline, design: .monospaced))
                         .foregroundStyle(Color(red: 0.76, green: 0.94, blue: 0.84))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,6 +216,19 @@ private struct TerminalFirstPrototype: View {
             .padding(.bottom, 64)
         }
         .background(Color(uiColor: .systemBackground))
+    }
+
+    private var selectedOutput: String {
+        """
+        › \(selected.title)
+
+          状态: \(selected.status.title)
+          \(selected.detail)
+
+        › Agent 最新输出
+
+        \(demoOutput)
+        """
     }
 
     @ViewBuilder
