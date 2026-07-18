@@ -1,8 +1,8 @@
 import Foundation
 
-public let nativeProtocolVersion = 1
+let nativeProtocolVersion = 1
 
-public enum NativeConnectionError: Error, Equatable, Sendable {
+enum NativeConnectionError: Error, Equatable, Sendable {
     case invalidEndpoint
     case tls
     case transport
@@ -46,7 +46,7 @@ public struct AgentPane: Codable, Equatable, Hashable, Sendable, Identifiable {
     }
 }
 
-public enum NativeServerMessage: Equatable, Sendable, Decodable {
+@_spi(Testing) public enum NativeServerMessage: Equatable, Sendable, Decodable {
     case hello(protocolVersion: Int, serverEpoch: String)
     case paneSnapshot(serverEpoch: String, revision: Int, panes: [AgentPane])
     case outputSnapshot(
@@ -107,7 +107,7 @@ public enum NativeServerMessage: Equatable, Sendable, Decodable {
     }
 }
 
-public enum NativeClientMessage: Equatable, Sendable, Encodable {
+@_spi(Testing) public enum NativeClientMessage: Equatable, Sendable, Encodable {
     case subscribe(
         subscriptionID: String,
         paneID: String,
@@ -136,7 +136,7 @@ public enum NativeClientMessage: Equatable, Sendable, Encodable {
     }
 }
 
-@MainActor
+@_spi(Testing) @MainActor
 public protocol NativeConnectionServing: AnyObject {
     func open(
         origin: String,

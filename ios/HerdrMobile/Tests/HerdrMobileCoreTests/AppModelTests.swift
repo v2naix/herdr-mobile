@@ -1,5 +1,5 @@
 import Foundation
-import HerdrMobileCore
+@_spi(Testing) import HerdrMobileCore
 
 private struct TestFailure: Error, CustomStringConvertible {
     let description: String

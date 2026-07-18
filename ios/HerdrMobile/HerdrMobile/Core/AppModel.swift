@@ -113,7 +113,7 @@ public final class AppModel: ObservableObject {
     private var subscriptionID: String?
     private var outputRevision = 0
 
-    public init(
+    @_spi(Testing) public init(
         sessions: NativeSessionServing,
         credentials: CredentialStoring,
         configuration: OriginPersisting,

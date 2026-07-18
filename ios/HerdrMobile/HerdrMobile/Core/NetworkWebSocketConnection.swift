@@ -3,15 +3,15 @@ import Network
 
 @available(iOS 26.0, macOS 26.0, *)
 @MainActor
-public final class NetworkWebSocketConnection: NativeConnectionServing {
+final class NetworkWebSocketConnection: NativeConnectionServing {
     private static let maximumMessageSize = 8 * 1024
 
     private var connection: NetworkConnection<WebSocket>?
     private var receiveTask: Task<Void, Never>?
 
-    public init() {}
+    init() {}
 
-    public func open(
+    func open(
         origin: String,
         sessionToken: String
     ) -> AsyncThrowingStream<NativeServerMessage, Error> {
@@ -41,6 +41,19 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
             receiveTask = Task {
                 do {
                     for try await message in connection.messages {
+                        switch message.metadata.opcode {
+                        case .close:
+                            continuation.finish()
+                            return
+                        case .ping, .pong:
+                            continue
+                        case .text:
+                            break
+                        case .binary, .cont:
+                            throw NativeConnectionError.invalidMessage
+                        @unknown default:
+                            throw NativeConnectionError.invalidMessage
+                        }
                         let data = message.content
                         guard data.count <= Self.maximumMessageSize else {
                             throw NativeConnectionError.messageTooLarge
@@ -64,7 +77,7 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
         }
     }
 
-    public func send(_ message: NativeClientMessage) async throws {
+    func send(_ message: NativeClientMessage) async throws {
         guard let connection else { throw NativeConnectionError.transport }
         let data = try JSONEncoder().encode(message)
         guard data.count <= Self.maximumMessageSize,
@@ -79,7 +92,7 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
         }
     }
 
-    public func cancel() {
+    func cancel() {
         receiveTask?.cancel()
         receiveTask = nil
         connection = nil
