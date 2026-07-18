@@ -11,7 +11,7 @@
 `ios-0.1.0-rc.2` 必须指向准备安装到目标 iPhone 的 `main` 提交。执行任何检查前记录：
 
 ```text
-提交（git rev-parse 'ios-0.1.0-rc.2^{commit}'）：_________________
+提交（git rev-parse 'ios-0.1.0-rc.2^{commit}'）：`795877620d70ea04916f8b9df2e787e79105520c`
 Xcode 版本（xcodebuild -version）：Xcode 26.6（Build 17F113），iPhoneOS 26.5 SDK
 iPhone 型号：____________________________________________________
 iOS 版本：_______________________________________________________
@@ -50,15 +50,15 @@ git diff --check
 
 | 检查 | RC.2 基线 | 候选结果 | 日期/备注 |
 |---|---:|---|---|
-| Python ASGI/协议/安全回归 | 46 项 | ☐ 通过 ☐ 失败 | |
-| PWA reconnect-policy | 2 项 | ☐ 通过 ☐ 失败 | |
-| Swift 顶层及集成检查 | 37 项 | ☐ 通过 ☐ 失败 | |
-| Swift package build | 通过 | ☐ 通过 ☐ 失败 | |
-| SwiftUI/Core 直接类型检查 | 通过 | ☐ 通过 ☐ 失败 | |
-| Xcode generic iOS Debug build | 通过 | ☐ 通过 ☐ 失败 | |
-| Xcode generic iOS Release build | 通过 | ☐ 通过 ☐ 失败 | |
-| Xcode 工程 plist lint | 通过 | ☐ 通过 ☐ 失败 | |
-| 工作树差异检查 | 通过 | ☐ 通过 ☐ 失败 | |
+| Python ASGI/协议/安全回归 | 46 项 | ☑ 通过 ☐ 失败 | 2026-07-18；46 项通过 |
+| PWA reconnect-policy | 2 项 | ☑ 通过 ☐ 失败 | 2026-07-18；2 项通过 |
+| Swift 顶层及集成检查 | 37 项 | ☑ 通过 ☐ 失败 | 2026-07-18；37 项通过 |
+| Swift package build | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；通过 |
+| SwiftUI/Core 直接类型检查 | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；通过 |
+| Xcode generic iOS Debug build | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；unsigned iPhoneOS 构建通过 |
+| Xcode generic iOS Release build | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；unsigned iPhoneOS 构建通过 |
+| Xcode 工程 plist lint | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；`project.pbxproj: OK` |
+| 工作树差异检查 | 通过 | ☑ 通过 ☐ 失败 | 2026-07-18；候选工作树干净，`git diff --check` 通过 |
 
 自动化覆盖包括浏览器/原生认证隔离、会话过期与撤销、epoch/version、完整 pane/output 快照、身份校验、命令确认与去重、PWA 兼容；原生顶层覆盖设置、导航、reader、命令、生命周期、重连、单次重新认证、陈旧身份、诊断、更换服务器及退出登录。聚焦检查覆盖 Keychain 查询策略、原生 HTTP bearer 请求、WebSocket 握手策略、ping、close、取消和消息上限。
 
