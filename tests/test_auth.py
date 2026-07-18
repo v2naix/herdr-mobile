@@ -36,6 +36,18 @@ class AuthTests(unittest.TestCase):
         self.assertTrue(store.valid(retained))
         self.assertFalse(store.revoke("made-up"))
 
+    def test_sessions_are_bound_to_their_authentication_audience(self):
+        store = SessionStore("correct-token")
+        browser = store.exchange("correct-token", "browser")
+        native = store.exchange("correct-token", "native")
+
+        self.assertTrue(store.valid(browser, "browser"))
+        self.assertFalse(store.valid(browser, "native"))
+        self.assertTrue(store.valid(native, "native"))
+        self.assertFalse(store.valid(native, "browser"))
+        self.assertFalse(store.revoke(native, "browser"))
+        self.assertTrue(store.valid(native, "native"))
+
     def test_exchange_purges_expired_sessions(self):
         now = [100.0]
         store = SessionStore("correct-token", ttl_seconds=10, clock=lambda: now[0])

@@ -42,6 +42,96 @@ class AppTests(unittest.TestCase):
         self.assertIn("SameSite=strict", cookie)
         self.assertNotIn("test-token", cookie)
 
+    def test_native_session_exchange_uses_bearer_without_origin_or_cookie(self):
+        response = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json()), {"token", "expires_in"})
+        self.assertGreaterEqual(response.json()["expires_in"], 1)
+        self.assertNotIn("set-cookie", response.headers)
+        self.assertNotEqual(response.json()["token"], "test-token")
+
+    def test_native_session_rejects_missing_or_invalid_bootstrap_token(self):
+        self.assertEqual(self.client.post("/api/native/session").status_code, 401)
+        self.assertEqual(
+            self.client.post(
+                "/api/native/session",
+                headers={"Authorization": "Bearer wrong-token"},
+            ).status_code,
+            401,
+        )
+
+    def test_native_session_can_be_revoked_only_with_its_bearer(self):
+        native = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+        browser_response = self.client.post(
+            "/api/session",
+            headers={
+                "Authorization": "Bearer test-token",
+                "origin": "https://mac.example.ts.net",
+            },
+        )
+        browser = browser_response.cookies["herdr_mobile_session"]
+
+        self.assertEqual(
+            self.client.delete(
+                "/api/native/session",
+                headers={"Authorization": f"Bearer {browser}"},
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.delete(
+                "/api/native/session",
+                headers={"Authorization": f"Bearer {native}"},
+            ).status_code,
+            204,
+        )
+        self.assertEqual(
+            self.client.delete(
+                "/api/native/session",
+                headers={"Authorization": f"Bearer {native}"},
+            ).status_code,
+            401,
+        )
+
+    def test_native_exchange_shares_the_existing_authentication_rate_limit(self):
+        for _ in range(10):
+            response = self.client.post(
+                "/api/native/session",
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            self.assertEqual(response.status_code, 401)
+
+        response = self.client.post(
+            "/api/session",
+            headers={
+                "Authorization": "Bearer test-token",
+                "origin": "https://mac.example.ts.net",
+            },
+        )
+        self.assertEqual(response.status_code, 429)
+
+    def test_native_and_browser_sessions_are_not_interchangeable(self):
+        native = self.client.post(
+            "/api/native/session",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()["token"]
+
+        with self.client.websocket_connect(
+            "/ws",
+            cookies={"herdr_mobile_session": native},
+            headers={"origin": "https://mac.example.ts.net"},
+        ) as socket:
+            with self.assertRaises(WebSocketDisconnect) as rejected:
+                socket.receive_text()
+        self.assertEqual(rejected.exception.code, 1008)
+
     def test_logout_requires_allowed_origin_clears_cookie_and_revokes_session(self):
         origin = "https://mac.example.ts.net"
         response = self.client.post(

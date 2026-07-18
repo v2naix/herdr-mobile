@@ -20,6 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - Provides fixed `approve once / deny` actions verified against MacGuard's `ctx.ui.confirm`. The UI does not show `always allow`, and the server rejects that action.
 - Automatically reconnects WebSockets after transient network failures. Authentication or Origin rejection (`1008`) stops reconnection and returns to the login screen, preventing invalid request loops. Includes a dark iPhone UI, manifest, and service worker for installation on the iPhone Home Screen. Logging out immediately revokes the current in-memory session.
 - Provides `GET /healthz`, strict Origin and CSP enforcement, an 8 KiB WebSocket message limit, and connection and rate limits.
+- `ios/HerdrMobile/` contains the production iOS 26 SwiftUI client foundation: one HTTPS Mac configuration, separate native bearer-session validation, passcode-bound Keychain storage for the bootstrap token, cold-launch recovery, server replacement, and local-first logout. Live pane browsing follows in the next slice.
 - Structured event logs do not record terminal input or output content. Uvicorn access logging is disabled by default.
 - The adapter accepts an injectable fake runner. Tests cover pane identity validation, input boundaries, authentication, and the XSS rendering boundary.
 
@@ -66,6 +67,8 @@ HERDR_MOBILE_ALLOWED_ORIGINS='http://127.0.0.1:8787' \
 ```
 
 Open the page and paste the token printed by `generate-token.sh`. The frontend calls `POST /api/session` once with `Authorization: Bearer`. The server exchanges the token for a 12-hour, in-memory `HttpOnly; Secure; SameSite=Strict` cookie. The token never enters the URL, localStorage, or cookies.
+
+The native client instead uses separate `POST /api/native/session` and `DELETE /api/native/session` endpoints. The bootstrap token is presented only in the `Authorization` header; the returned short-lived bearer sets no cookie and cannot be used as a browser session. See [`ios/HerdrMobile/README.md`](ios/HerdrMobile/README.md) for Xcode instructions.
 
 ## Surge Ponte + custom-domain HTTPS
 
@@ -166,7 +169,7 @@ Clients cannot send `agent_event`, and no corresponding API exists. State comes 
 
 **Primary controls:** Tailscale ACLs; a local token enabled by default; short-lived HttpOnly sessions; exact Origin validation for both HTTP session exchange and WebSockets; CSP; strict schemas and allowlists; length, line-count, control-character, rate, connection, and output limits; argv-only subprocesses; pane rediscovery and terminal identity validation before every operation; plain-text DOM rendering; and exclusion of sensitive content from logs.
 
-**Outside the MVP scope:** direct public-internet exposure, multi-user access or RBAC, auditing terminal content, arbitrary shell access, file browsing, creating or closing panes, a native iOS app, and attackers who already fully control the Mac or browser session. The health endpoint is public but returns only the fixed `{"status":"ok"}` response; it should still remain behind the loopback/Serve boundary.
+**Outside the current scope:** direct public-internet exposure, multi-user access or RBAC, auditing terminal content, arbitrary shell access, file browsing, creating or closing panes, and attackers who already fully control the Mac or a client session. The health endpoint is public but returns only the fixed `{"status":"ok"}` response; it should still remain behind the loopback/Serve boundary.
 
 The second authentication layer can be disabled with `HERDR_MOBILE_AUTH=0`, but this is not recommended. Even in that mode, keep Tailscale Serve, ACLs, and Origin validation enabled.
 
@@ -186,4 +189,5 @@ server/   FastAPI, authentication, protocol validation, and the herdr adapter
 web/      Responsive UI, manifest, and service worker
 scripts/  Loopback startup, token, and Tailscale Serve helpers
 tests/    Unit and ASGI integration tests
+ios/      Production iOS 26 client and isolated prototypes
 ```

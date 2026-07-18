@@ -75,36 +75,55 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/api/session", status_code=204)
-    async def exchange_session(request: Request, response: Response) -> None:
-        if not auth_enabled:
-            return
-        if request.headers.get("origin") not in allowed_origins:
-            raise HTTPException(403, "origin rejected")
+    def exchange_bearer(request: Request, audience: str) -> str:
         now = time.monotonic()
         while session_attempts and session_attempts[0] <= now - 60.0:
             session_attempts.popleft()
         if len(session_attempts) >= 10:
             raise HTTPException(429, "too many authentication attempts")
         session_attempts.append(now)
+        if not auth_enabled:
+            return sessions.issue(audience)
         authorization = request.headers.get("authorization", "")
         if not authorization.startswith("Bearer "):
             raise HTTPException(401, "bearer token required")
-        session = sessions.exchange(authorization[7:])
+        session = sessions.exchange(authorization[7:], audience)
         if session is None:
-            logger.warning(json.dumps({"event": "auth_failed"}))
+            logger.warning(json.dumps({"event": "auth_failed", "audience": audience}))
             raise HTTPException(401, "invalid bearer token")
+        return session
+
+    @app.post("/api/session", status_code=204)
+    async def exchange_session(request: Request, response: Response) -> None:
+        if request.headers.get("origin") not in allowed_origins:
+            raise HTTPException(403, "origin rejected")
+        if not auth_enabled:
+            return
+        session = exchange_bearer(request, "browser")
         response.set_cookie(
             COOKIE, session, httponly=True, secure=secure_cookie, samesite="strict",
-            max_age=12 * 60 * 60, path="/",
+            max_age=sessions.ttl_seconds, path="/",
         )
+
+    @app.post("/api/native/session")
+    async def exchange_native_session(request: Request) -> dict[str, str | int]:
+        session = exchange_bearer(request, "native")
+        return {"token": session, "expires_in": sessions.ttl_seconds}
+
+    @app.delete("/api/native/session", status_code=204)
+    async def revoke_native_session(request: Request) -> None:
+        authorization = request.headers.get("authorization", "")
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(401, "native bearer token required")
+        if auth_enabled and not sessions.revoke(authorization[7:], "native"):
+            raise HTTPException(401, "invalid native session")
 
     @app.post("/api/logout", status_code=204)
     async def logout(request: Request, response: Response) -> None:
         if request.headers.get("origin") not in allowed_origins:
             raise HTTPException(403, "origin rejected")
         if auth_enabled:
-            sessions.revoke(request.cookies.get(COOKIE))
+            sessions.revoke(request.cookies.get(COOKIE), "browser")
         response.delete_cookie(
             COOKIE, httponly=True, secure=secure_cookie, samesite="strict", path="/"
         )
@@ -116,7 +135,7 @@ def create_app(
             await ws.close(code=1008, reason="origin rejected")
             return
         await ws.accept()
-        if auth_enabled and not sessions.valid(ws.cookies.get(COOKIE)):
+        if auth_enabled and not sessions.valid(ws.cookies.get(COOKIE), "browser"):
             await ws.close(code=1008, reason="authentication required")
             return
         if not await limit.acquire():

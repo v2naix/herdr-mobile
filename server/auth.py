@@ -1,4 +1,4 @@
-"""Local bearer token and short-lived browser sessions."""
+"""Local bootstrap token and audience-bound short-lived sessions."""
 
 import hashlib
 import hmac
@@ -36,35 +36,48 @@ class SessionStore:
         if max_sessions < 1:
             raise ValueError("max_sessions must be positive")
         self._token_hash = hashlib.sha256(bearer_token.encode()).digest()
-        self._sessions: dict[str, float] = {}
+        self._sessions: dict[str, tuple[float, str]] = {}
         self._ttl = ttl_seconds
         self._clock = clock
         self._max_sessions = max_sessions
 
-    def exchange(self, bearer_token: str) -> str | None:
+    @property
+    def ttl_seconds(self) -> int:
+        return self._ttl
+
+    def exchange(self, bearer_token: str, audience: str = "browser") -> str | None:
         candidate = hashlib.sha256(bearer_token.encode()).digest()
         if not hmac.compare_digest(candidate, self._token_hash):
             return None
+        return self.issue(audience)
+
+    def issue(self, audience: str = "browser") -> str:
         now = self._clock()
-        expired = [session for session, expires in self._sessions.items() if expires <= now]
+        expired = [
+            session for session, (expires, _) in self._sessions.items() if expires <= now
+        ]
         for session in expired:
             self._sessions.pop(session)
         while len(self._sessions) >= self._max_sessions:
             self._sessions.pop(next(iter(self._sessions)))
         session = secrets.token_urlsafe(32)
-        self._sessions[session] = now + self._ttl
+        self._sessions[session] = (now + self._ttl, audience)
         return session
 
-    def revoke(self, session: str | None) -> bool:
-        if not session:
+    def revoke(self, session: str | None, audience: str = "browser") -> bool:
+        if not self.valid(session, audience):
             return False
-        return self._sessions.pop(session, None) is not None
+        self._sessions.pop(session, None)
+        return True
 
-    def valid(self, session: str | None) -> bool:
+    def valid(self, session: str | None, audience: str = "browser") -> bool:
         if not session:
             return False
-        expires = self._sessions.get(session)
-        if expires is None or expires <= self._clock():
+        record = self._sessions.get(session)
+        if record is None:
+            return False
+        expires, stored_audience = record
+        if expires <= self._clock():
             self._sessions.pop(session, None)
             return False
-        return True
+        return hmac.compare_digest(stored_audience, audience)

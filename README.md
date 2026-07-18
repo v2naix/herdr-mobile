@@ -20,6 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - 提供针对 MacGuard `ctx.ui.confirm` 实测过的固定 `approve once / deny` 动作；界面不显示 `always allow`，服务端也拒绝该动作。
 - WebSocket 在临时断网后自动重连；认证或 Origin 被拒绝（1008）时停止重连并返回登录页，避免无效请求循环。提供深色 iPhone UI、manifest 和 service worker，可添加到 iPhone 主屏幕；支持注销并立即撤销当前内存会话。
 - 健康检查 `GET /healthz`、严格 Origin/CSP、8 KiB WS 消息上限、连接/速率限制。
+- `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端基础：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并支持冷启动恢复、更换服务器和本地优先退出。实时 pane 浏览将在后续阶段加入。
 - 结构化事件日志不记录终端输入或输出正文；Uvicorn access log 默认关闭。
 - adapter 可注入 fake runner，测试覆盖 pane 身份校验、输入边界、认证和 XSS 展示边界。
 
@@ -64,6 +65,8 @@ HERDR_MOBILE_ALLOWED_ORIGINS='http://127.0.0.1:8787' \
 ```
 
 打开页面，粘贴 `generate-token.sh` 显示的 token。前端通过 `Authorization: Bearer` 调用一次 `POST /api/session`，服务端换发 12 小时、内存态的 `HttpOnly; Secure; SameSite=Strict` cookie；token 不进入 URL、localStorage 或 cookie。
+
+原生客户端改用独立的 `POST /api/native/session` 和 `DELETE /api/native/session`。bootstrap token 只通过 `Authorization` 请求头提交；换发的短期 bearer 不设置 Cookie，并与浏览器会话不可互换。Xcode 运行方法见 [`ios/HerdrMobile/README.md`](ios/HerdrMobile/README.md)。
 
 ## Surge Ponte + 自有域名 HTTPS
 
@@ -164,7 +167,7 @@ WebSocket 只接受以下严格对象（未知字段会被拒绝）：
 
 **主要措施：** Tailscale ACL；默认本地 token；短期 HttpOnly 会话；HTTP 会话交换与 WebSocket 均校验精确 Origin；CSP；严格 schema/allowlist；长度、行数、控制字符、速率、连接和输出限制；argv-only 子进程；操作前重新发现 pane 并校验 terminal 身份；纯文本 DOM 渲染；敏感正文不入日志。
 
-**不在 MVP 范围：** 公网直接暴露、多用户/RBAC、审计终端正文、任意 shell、文件浏览、pane 创建/关闭、原生 iOS App、抵御已完全控制 Mac 或浏览器会话的攻击者。健康检查公开但只返回固定 `{"status":"ok"}`；它仍应只在 loopback/Serve 边界内使用。
+**不在当前范围：** 公网直接暴露、多用户/RBAC、审计终端正文、任意 shell、文件浏览、pane 创建/关闭、抵御已完全控制 Mac 或客户端会话的攻击者。健康检查公开但只返回固定 `{"status":"ok"}`；它仍应只在 loopback/Serve 边界内使用。
 
 可通过 `HERDR_MOBILE_AUTH=0` 关闭第二层认证，但不推荐；即使关闭，也必须保留 Tailscale Serve、ACL 和 Origin 校验。
 
@@ -184,4 +187,5 @@ server/   FastAPI、认证、协议校验、herdr adapter
 web/      响应式 UI、manifest、service worker
 scripts/  loopback 启动、token、Tailscale Serve 辅助脚本
 tests/    单元和 ASGI 集成测试
+ios/      正式 iOS 26 客户端及隔离的原型
 ```

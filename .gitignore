@@ -9,3 +9,6 @@ __pycache__/
 .tools/
 .runtime/
 .DS_Store
+.build/
+xcuserdata/
+*.xcuserstate
