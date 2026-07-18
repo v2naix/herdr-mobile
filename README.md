@@ -183,7 +183,7 @@ node --test tests/test_reconnect_policy.js
 (cd ios/HerdrMobile && swift run HerdrMobileCoreTests)
 ```
 
-测试缝是 adapter 公共接口、协议校验函数、HTTP/WS 认证边界及原生客户端顶层状态/动作接口。测试输出中的 `<script>` 示例用于证明终端文本不会进入服务端日志或被嵌入 HTML；运行时前端使用 `textContent`。iOS RC 的自动化证据、Safari PWA 回归步骤、目标 iPhone 清单和发布阻断规则见 [`docs/release/ios-0.1.0-rc.1.md`](docs/release/ios-0.1.0-rc.1.md)。
+测试缝是 adapter 公共接口、协议校验函数、HTTP/WS 认证边界及原生客户端顶层状态/动作接口。测试输出中的 `<script>` 示例用于证明终端文本不会进入服务端日志或被嵌入 HTML；运行时前端使用 `textContent`。iOS RC 的自动化证据、Safari PWA 回归步骤、目标 iPhone 清单和发布阻断规则见 [`docs/release/ios-0.1.0-rc.2.md`](docs/release/ios-0.1.0-rc.2.md)。
 
 ## 项目结构
 
