@@ -20,7 +20,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - 提供针对 MacGuard `ctx.ui.confirm` 实测过的固定 `approve once / deny` 动作；界面不显示 `always allow`，服务端也拒绝该动作。
 - WebSocket 在临时断网后自动重连；认证或 Origin 被拒绝（1008）时停止重连并返回登录页，避免无效请求循环。提供深色 iPhone UI、manifest 和 service worker，可添加到 iPhone 主屏幕；支持注销并立即撤销当前内存会话。
 - 健康检查 `GET /healthz`、严格 Origin/CSP、8 KiB WS 消息上限、连接/速率限制。
-- `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并可浏览 agent pane、打开详情和跟随最新的有界输出快照。
+- `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并可浏览 agent pane；详情支持跟随最新输出、冻结历史阅读、原始宽度横向查看和独立回复编辑器。
 - 结构化事件日志不记录终端输入或输出正文；Uvicorn access log 默认关闭。
 - adapter 可注入 fake runner，测试覆盖 pane 身份校验、输入边界、认证和 XSS 展示边界。
 

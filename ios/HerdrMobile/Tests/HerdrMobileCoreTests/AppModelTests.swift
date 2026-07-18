@@ -24,8 +24,12 @@ struct AppModelTests {
         try await livePaneSnapshotsDriveVisibleNavigationState()
         try await incompatibleProtocolStopsTheNativeConnection()
         try await outputFilteringUsesEpochSubscriptionIdentityAndRevision()
+        try await scrollingAwayFreezesVisibleOutputDuringBursts()
+        try await returningToBottomAppliesOnlyNewestPendingSnapshot()
+        try await widthModeIsIndependentAndResetsAfterLeavingPane()
+        try await replyEditorPresentationPreservesReaderContext()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 11 passed")
+        print("HerdrMobileCoreTests: 15 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -225,6 +229,132 @@ struct AppModelTests {
 
         try check(model.state.outputText == "latest full snapshot", "newest current full snapshot should win across a revision gap")
         try check(model.state.selectedPane == pane, "accepted output must not alter navigation")
+    }
+
+    static func scrollingAwayFreezesVisibleOutputDuringBursts() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live, identifiers: ["subscription-1"])
+        let pane = AgentPane(
+            paneID: "w1:p1", paneRef: "term-1", title: "Agent",
+            status: "working", cwd: "/repo", workspaceID: "w1"
+        )
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [pane]))
+        await settle()
+        await model.openPane(pane)
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 1, text: "visible"
+        ))
+        await settle()
+
+        model.userScrolledAwayFromBottom()
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 2, text: "pending one"
+        ))
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: "w1:p1", paneRef: "term-1", revision: 3, text: "pending newest"
+        ))
+        await settle()
+
+        try check(model.state.readerMode == .readingHistory, "scrolling away should enter history reading")
+        try check(model.state.outputText == "visible", "history reading should freeze the visible snapshot")
+        try check(model.state.hasPendingOutput, "new output should expose a return-to-bottom control")
+    }
+
+    static func returningToBottomAppliesOnlyNewestPendingSnapshot() async throws {
+        let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1, text: "visible"
+        ))
+        await settle()
+        model.userScrolledAwayFromBottom()
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 2, text: "discarded pending"
+        ))
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 5, text: "newest pending"
+        ))
+        await settle()
+
+        model.returnToBottom()
+
+        try check(model.state.readerMode == .following, "bottom return should restore following")
+        try check(model.state.outputText == "newest pending", "bottom return should apply the newest full snapshot once")
+        try check(!model.state.hasPendingOutput, "bottom return should clear the new-output indicator")
+        model.returnToBottom()
+        try check(model.state.outputText == "newest pending", "repeated bottom return must not reapply discarded snapshots")
+    }
+
+    static func widthModeIsIndependentAndResetsAfterLeavingPane() async throws {
+        let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1, text: "visible"
+        ))
+        await settle()
+        model.userScrolledAwayFromBottom()
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 2, text: "pending"
+        ))
+        await settle()
+
+        model.setReaderWidth(.original)
+
+        try check(model.state.readerWidth == .original, "original-width mode should be visible")
+        try check(model.state.readerMode == .readingHistory, "width changes must not alter follow state")
+        try check(model.state.outputText == "visible", "width changes must not replace the frozen snapshot")
+        try check(model.state.hasPendingOutput, "width changes must retain pending output")
+        try check(live.sent.count == 1, "width changes must not resubscribe")
+
+        model.closePane()
+        try check(model.state.readerWidth == .wrapped, "leaving a pane should restore wrapped lines")
+    }
+
+    static func replyEditorPresentationPreservesReaderContext() async throws {
+        let (model, live, pane) = await modelWithOpenPane(identifiers: ["subscription-1"])
+        live.emit(.outputSnapshot(
+            serverEpoch: "epoch-1", subscriptionID: "subscription-1",
+            paneID: pane.paneID, paneRef: pane.paneRef, revision: 1, text: "reader context"
+        ))
+        await settle()
+        model.userScrolledAwayFromBottom()
+
+        model.presentReplyEditor()
+        model.updateReplyDraft("请继续")
+
+        try check(model.state.isReplyEditorPresented, "Reply should present the dedicated editor")
+        try check(model.state.replyDraft == "请继续", "unsent reply text should remain in memory")
+        model.dismissReplyEditor()
+        try check(!model.state.isReplyEditorPresented, "closing should dismiss the reply editor")
+        try check(model.state.outputText == "reader context", "closing the editor should preserve the visible snapshot")
+        try check(model.state.readerMode == .readingHistory, "closing the editor should preserve the reading position mode")
+        try check(model.state.replyDraft == "请继续", "closing the editor should not discard an unsent reply")
+        try check(live.sent.count == 1, "editor presentation must not alter the subscription")
+    }
+
+    private static func modelWithOpenPane(
+        identifiers: [String]
+    ) async -> (AppModel, FakeLiveConnection, AgentPane) {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live, identifiers: identifiers)
+        let pane = AgentPane(
+            paneID: "w1:p1", paneRef: "term-1", title: "Agent",
+            status: "working", cwd: "/repo", workspaceID: "w1"
+        )
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: [pane]))
+        await settle()
+        await model.openPane(pane)
+        return (model, live, pane)
     }
 
     private static func configuredModel(

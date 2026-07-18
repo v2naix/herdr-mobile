@@ -15,6 +15,16 @@ public enum NativeConnectionState: Equatable, Sendable {
     case failed
 }
 
+public enum ReaderMode: Equatable, Sendable {
+    case following
+    case readingHistory
+}
+
+public enum ReaderWidthMode: Equatable, Sendable {
+    case wrapped
+    case original
+}
+
 public struct AppViewState: Equatable, Sendable {
     public var screen: AppScreen
     public var origin: String
@@ -25,6 +35,11 @@ public struct AppViewState: Equatable, Sendable {
     public var panes: [AgentPane]
     public var selectedPane: AgentPane?
     public var outputText: String
+    public var readerMode: ReaderMode
+    public var hasPendingOutput: Bool
+    public var readerWidth: ReaderWidthMode
+    public var isReplyEditorPresented: Bool
+    public var replyDraft: String
 
     public init(
         screen: AppScreen = .setup,
@@ -35,7 +50,12 @@ public struct AppViewState: Equatable, Sendable {
         connection: NativeConnectionState = .disconnected,
         panes: [AgentPane] = [],
         selectedPane: AgentPane? = nil,
-        outputText: String = ""
+        outputText: String = "",
+        readerMode: ReaderMode = .following,
+        hasPendingOutput: Bool = false,
+        readerWidth: ReaderWidthMode = .wrapped,
+        isReplyEditorPresented: Bool = false,
+        replyDraft: String = ""
     ) {
         self.screen = screen
         self.origin = origin
@@ -46,6 +66,11 @@ public struct AppViewState: Equatable, Sendable {
         self.panes = panes
         self.selectedPane = selectedPane
         self.outputText = outputText
+        self.readerMode = readerMode
+        self.hasPendingOutput = hasPendingOutput
+        self.readerWidth = readerWidth
+        self.isReplyEditorPresented = isReplyEditorPresented
+        self.replyDraft = replyDraft
     }
 }
 
@@ -112,6 +137,7 @@ public final class AppModel: ObservableObject {
     private var paneRevision = 0
     private var subscriptionID: String?
     private var outputRevision = 0
+    private var pendingOutputText: String?
 
     @_spi(Testing) public init(
         sessions: NativeSessionServing,
@@ -210,8 +236,8 @@ public final class AppModel: ObservableObject {
         guard state.panes.contains(pane), let liveConnection else { return }
         let boundedLines = max(1, min(lines, 300))
         let newSubscriptionID = identifier()
+        resetReader()
         state.selectedPane = pane
-        state.outputText = ""
         subscriptionID = newSubscriptionID
         outputRevision = 0
         do {
@@ -229,9 +255,43 @@ public final class AppModel: ObservableObject {
 
     public func closePane() {
         state.selectedPane = nil
-        state.outputText = ""
+        resetReader()
         subscriptionID = nil
         outputRevision = 0
+    }
+
+    public func userScrolledAwayFromBottom() {
+        guard state.selectedPane != nil, state.readerMode == .following else { return }
+        state.readerMode = .readingHistory
+    }
+
+    public func returnToBottom() {
+        guard state.selectedPane != nil else { return }
+        if let pendingOutputText {
+            state.outputText = pendingOutputText
+        }
+        pendingOutputText = nil
+        state.hasPendingOutput = false
+        state.readerMode = .following
+    }
+
+    public func setReaderWidth(_ width: ReaderWidthMode) {
+        guard state.selectedPane != nil else { return }
+        state.readerWidth = width
+    }
+
+    public func presentReplyEditor() {
+        guard state.selectedPane != nil else { return }
+        state.isReplyEditorPresented = true
+    }
+
+    public func dismissReplyEditor() {
+        state.isReplyEditorPresented = false
+    }
+
+    public func updateReplyDraft(_ draft: String) {
+        guard state.selectedPane != nil else { return }
+        state.replyDraft = draft
     }
 
     public func requestServerReplacement() {
@@ -307,6 +367,8 @@ public final class AppModel: ObservableObject {
                 serverEpoch = newEpoch
                 paneRevision = 0
                 outputRevision = 0
+                pendingOutputText = nil
+                state.hasPendingOutput = false
                 state.panes = []
             }
         case let .paneSnapshot(messageEpoch, revision, panes):
@@ -331,10 +393,27 @@ public final class AppModel: ObservableObject {
                   revision > outputRevision
             else { return }
             outputRevision = revision
-            state.outputText = text
+            if state.readerMode == .following {
+                pendingOutputText = nil
+                state.hasPendingOutput = false
+                state.outputText = text
+            } else {
+                pendingOutputText = text
+                state.hasPendingOutput = true
+            }
         case let .error(error):
             state.error = error
         }
+    }
+
+    private func resetReader() {
+        state.outputText = ""
+        state.readerMode = .following
+        state.hasPendingOutput = false
+        state.readerWidth = .wrapped
+        state.isReplyEditorPresented = false
+        state.replyDraft = ""
+        pendingOutputText = nil
     }
 
     private func message(for error: Error) -> String {

@@ -188,30 +188,181 @@ private struct PaneDetailView: View {
     @ObservedObject var model: AppModel
     let pane: AgentPane
 
+    @State private var scrollPosition = ScrollPosition(edge: .bottom)
+    @State private var isNearBottom = true
+    @State private var isUserScrolling = false
+
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Text(model.state.outputText.isEmpty ? "正在等待输出…" : model.state.outputText)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                Color.clear
-                    .frame(height: 1)
-                    .id("output-bottom")
-            }
-            .background(Color.black.opacity(0.92))
-            .foregroundStyle(.white)
-            .onChange(of: model.state.outputText) {
-                proxy.scrollTo("output-bottom", anchor: .bottom)
-            }
-            .task(id: pane.id) {
-                await model.openPane(pane)
-            }
-            .onDisappear {
-                model.closePane()
+        ScrollView(.vertical) {
+            output
+                .padding()
+            Color.clear
+                .frame(height: 1)
+                .id("output-bottom")
+        }
+        .scrollPosition($scrollPosition)
+        .background(Color.black.opacity(0.92))
+        .foregroundStyle(.white)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+            let contentBottom = geometry.contentSize.height + geometry.contentInsets.bottom
+            return contentBottom - visibleBottom < 28
+        } action: { _, nearBottom in
+            isNearBottom = nearBottom
+            if isUserScrolling && !nearBottom {
+                model.userScrolledAwayFromBottom()
             }
         }
+        .onScrollPhaseChange { _, phase in
+            isUserScrolling = phase == .interacting || phase == .decelerating
+            if phase == .interacting && !isNearBottom {
+                model.userScrolledAwayFromBottom()
+            } else if phase == .idle,
+                      isNearBottom,
+                      model.state.readerMode == .readingHistory {
+                returnToBottom()
+            }
+        }
+        .onChange(of: model.state.outputText) {
+            if model.state.readerMode == .following {
+                scrollPosition.scrollTo(edge: .bottom)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if model.state.readerMode == .readingHistory {
+                Button(action: returnToBottom) {
+                    Label(
+                        model.state.hasPendingOutput ? "有新输出 · 返回底部" : "返回底部",
+                        systemImage: "arrow.down.to.line"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .padding()
+                .accessibilityIdentifier("return-to-bottom")
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            commandDeck
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.setReaderWidth(model.state.readerWidth == .wrapped ? .original : .wrapped)
+                } label: {
+                    Label(
+                        model.state.readerWidth == .wrapped ? "原始宽度" : "自动换行",
+                        systemImage: model.state.readerWidth == .wrapped ? "arrow.left.and.right" : "text.word.spacing"
+                    )
+                }
+            }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.state.isReplyEditorPresented },
+                set: { if !$0 { model.dismissReplyEditor() } }
+            )
+        ) {
+            ReplyEditor(model: model, paneTitle: pane.title)
+                .presentationDetents([.large])
+        }
+        .task(id: pane.id) {
+            await model.openPane(pane)
+        }
+        .onDisappear {
+            model.closePane()
+        }
         .navigationTitle(pane.title)
+    }
+
+    @ViewBuilder
+    private var output: some View {
+        let text = model.state.outputText.isEmpty ? "正在等待输出…" : model.state.outputText
+        if model.state.readerWidth == .wrapped {
+            Text(text)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView(.horizontal) {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var commandDeck: some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button("Reply") { model.presentReplyEditor() }
+                        .buttonStyle(.borderedProminent)
+                    commandButton("Enter")
+                    commandButton("Esc")
+                    commandButton("y")
+                    commandButton("n")
+                    commandButton("Allow once")
+                    commandButton("Deny", role: .destructive)
+                }
+                .padding(.horizontal)
+            }
+
+            Menu {
+                commandButton("Tab")
+                commandButton("↑")
+                commandButton("↓")
+                commandButton("←")
+                commandButton("→")
+                Divider()
+                commandButton("Ctrl+C")
+                commandButton("Ctrl+L")
+                commandButton("Ctrl+P")
+                commandButton("Ctrl+O")
+            } label: {
+                Label("更多按键", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .padding(.trailing)
+        }
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func commandButton(_ title: String, role: ButtonRole? = nil) -> some View {
+        Button(title, role: role) {}
+            .disabled(true)
+    }
+
+    private func returnToBottom() {
+        model.returnToBottom()
+        scrollPosition.scrollTo(edge: .bottom)
+    }
+}
+
+private struct ReplyEditor: View {
+    @ObservedObject var model: AppModel
+    let paneTitle: String
+
+    var body: some View {
+        NavigationStack {
+            TextEditor(text: Binding(
+                get: { model.state.replyDraft },
+                set: model.updateReplyDraft
+            ))
+            .font(.body)
+            .padding()
+            .navigationTitle("回复 \(paneTitle)")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { model.dismissReplyEditor() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("发送") {}
+                        .disabled(true)
+                }
+            }
+        }
     }
 }
