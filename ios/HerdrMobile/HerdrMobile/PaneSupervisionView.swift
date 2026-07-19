@@ -200,12 +200,17 @@ struct PaneSupervisionView: View {
                 commandKey("n", command: .no, tint: .red)
                 commandKey("Tab", command: .tab, tint: .gray)
                 Spacer(minLength: 0)
-                Button("回复") { model.presentReplyEditor() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
-                    .frame(minWidth: 56, minHeight: 44)
-                    .disabled(!canSendCommand)
-                    .accessibilityIdentifier("reply")
+                Button { model.presentReplyEditor() } label: {
+                    Text("回复")
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(minWidth: 68, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
+                .layoutPriority(1)
+                .disabled(!canSendCommand)
+                .accessibilityIdentifier("reply")
             }
             .controlSize(.regular)
             .padding(.horizontal, 12)
@@ -238,7 +243,12 @@ struct PaneSupervisionView: View {
                 .disabled(!canSendCommand)
                 .accessibilityIdentifier("more-commands")
                 commandKey("/", command: .slash, tint: .gray)
-                commandKey("Enter", command: .enter, tint: .blue)
+                commandIconKey(
+                    "return",
+                    accessibilityLabel: "Enter",
+                    command: .enter,
+                    tint: .blue
+                )
             }
             .controlSize(.regular)
             .padding(.horizontal, 12)
@@ -293,9 +303,26 @@ struct PaneSupervisionView: View {
         switch title {
         case "ctrl c": 48
         case "Tab": 38
-        case "Enter": 60
         default: nil
         }
+    }
+
+    private func commandIconKey(
+        _ systemImage: String,
+        accessibilityLabel: String,
+        command: QuickCommand,
+        tint: Color
+    ) -> some View {
+        Button {
+            Task { await model.sendQuickCommand(command) }
+        } label: {
+            Image(systemName: systemImage)
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .buttonStyle(.bordered)
+        .tint(tint)
+        .disabled(!canSendCommand)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private func commandButton(
