@@ -36,7 +36,7 @@ struct PaneSupervisionView: View {
                 )
             ) {
                 ReplyEditor(model: model)
-                    .presentationDetents([.height(260)])
+                    .presentationDetents([.height(190)])
                     .presentationDragIndicator(.visible)
             }
             .task(id: pane.id) {
@@ -193,7 +193,7 @@ struct PaneSupervisionView: View {
             }
 
             HStack(spacing: 7) {
-                commandKey("^C", command: .controlC, tint: .red)
+                commandKey("⌃C", command: .controlC, tint: .red)
                 commandKey("↑", command: .up, tint: .gray)
                 commandKey("↓", command: .down, tint: .gray)
                 commandKey("y", command: .yes, tint: .green)
@@ -303,7 +303,7 @@ struct PaneSupervisionView: View {
 
     private func minimumCommandWidth(for title: String) -> CGFloat? {
         switch title {
-        case "^C": 42
+        case "⌃C": 42
         case "⇥": 42
         default: nil
         }
@@ -367,7 +367,7 @@ private struct ReplyEditor: View {
             .font(.body)
             .focused($isEditorFocused)
             .disabled(replyIsLocked)
-            .frame(minHeight: 118)
+            .frame(minHeight: 60)
             .padding(10)
             .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
 
