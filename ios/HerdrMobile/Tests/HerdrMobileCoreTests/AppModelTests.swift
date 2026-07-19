@@ -488,7 +488,29 @@ struct AppModelTests {
         try check(!handshake.url.absoluteString.contains("native-session-secret"), "session credentials must never enter the URL")
         try check(handshake.authorizationHeader == "Bearer native-session-secret", "native WebSocket authentication should use the handshake header")
         try check(handshake.autoReplyPing, "Network WebSocket should automatically answer ping frames")
-        try check(handshake.maximumMessageSize == 8 * 1024, "Network WebSocket should enforce the 8 KiB message limit")
+        try check(
+            NetworkWebSocketConnection.maximumOutgoingMessageSize == 8 * 1024,
+            "client-to-server WebSocket messages should retain the 8 KiB limit"
+        )
+        let maximumTerminalOutput = String(repeating: "x", count: 128 * 1024)
+        let outputSnapshot = try JSONSerialization.data(withJSONObject: [
+            "type": "output_snapshot",
+            "server_epoch": "epoch-1",
+            "subscription_id": "subscription-1",
+            "pane_id": "w1:p1",
+            "pane_ref": "term-1",
+            "revision": 1,
+            "text": maximumTerminalOutput,
+        ])
+        try check(outputSnapshot.count > 8 * 1024, "the regression snapshot must exceed the old receive limit")
+        try check(
+            outputSnapshot.count <= handshake.maximumMessageSize,
+            "the native receive limit must fit the server's bounded terminal snapshot"
+        )
+        try check(
+            handshake.maximumMessageSize == NetworkWebSocketConnection.maximumIncomingMessageSize,
+            "the handshake should apply the separate bounded server-message limit"
+        )
         try check(NetworkWebSocketConnection.normalized(.protocolCode(.policyViolation)) == .authentication, "policy close should request authentication recovery")
         try check(NetworkWebSocketConnection.normalized(.protocolCode(.internalServerError)) == .backendUnavailable, "backend close should remain actionable")
         try check(NetworkWebSocketConnection.normalized(.protocolCode(.tlsHandshake)) == .tls, "TLS close must offer no bypass")

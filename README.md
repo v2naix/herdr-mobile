@@ -19,7 +19,7 @@ iPhone Safari / PWA ── tailnet HTTPS ── Tailscale Serve
 - 发送最多 4096 UTF-8 字节、20 行文字，并拒绝除换行外的控制字符；详情页提供 `Enter/Tab/Escape`、Y/N 快捷键、十字布局方向键，以及固定的 `Ctrl+C / Ctrl+L / Ctrl+P / Ctrl+O` 菜单。
 - 提供针对 MacGuard `ctx.ui.confirm` 实测过的固定 `approve once / deny` 动作；界面不显示 `always allow`，服务端也拒绝该动作。
 - WebSocket 在临时断网后自动重连；认证或 Origin 被拒绝（1008）时停止重连并返回登录页，避免无效请求循环。提供深色 iPhone UI、manifest 和 service worker，可添加到 iPhone 主屏幕；支持注销并立即撤销当前内存会话。
-- 健康检查 `GET /healthz`、严格 Origin/CSP、8 KiB WS 消息上限、连接/速率限制。
+- 健康检查 `GET /healthz`、严格 Origin/CSP、8 KiB 客户端 WS 消息上限、有界服务端快照、连接/速率限制。
 - `ios/HerdrMobile/` 提供正式的 iOS 26 SwiftUI 客户端：配置单个 HTTPS Mac、用独立原生 bearer 会话验证、以设备密码绑定的 Keychain 保存 bootstrap token，并可浏览 agent pane；详情支持跟随最新输出、冻结历史阅读、原始宽度横向查看，以及等待服务端确认、保留失败草稿且不会自动重发的固定回复操作。客户端只在前台连接，并在权威身份同步后安全恢复订阅。PWA 在原生验收及后续使用中始终保留为回退方案。
 - 结构化事件日志不记录终端输入或输出正文；Uvicorn access log 默认关闭。
 - adapter 可注入 fake runner，测试覆盖 pane 身份校验、输入边界、认证和 XSS 展示边界。
@@ -163,7 +163,7 @@ WebSocket 只接受以下严格对象（未知字段会被拒绝）：
 
 原生客户端只在前台连接。后台会暂停连接和重试并保留内存中的旧快照；恢复前台或网络路径变化后，客户端先同步权威 pane 列表并重新校验 `pane_id + pane_ref`，再恢复期望订阅。身份缺失或变化不会自动跳转或附着到复用 ID，未确认命令也不会在恢复过程中自动重发。
 
-客户端不能发送 `agent_event`，也没有相应 API。状态只来自服务端轮询。最多 8 个 WS 连接，每连接 10 秒 30 条消息，单消息最多 8 KiB；Uvicorn 总并发上限为 32。命令超时 8 秒。
+客户端不能发送 `agent_event`，也没有相应 API。状态只来自服务端轮询。最多 8 个 WS 连接，每连接 10 秒 30 条消息，客户端发往服务端的单条消息最多 8 KiB；服务端终端正文在编码前最多 128 KiB，原生客户端以 1 MiB 接收上限容纳完整 JSON 快照。Uvicorn 总并发上限为 32。命令超时 8 秒。
 
 ## 威胁模型
 

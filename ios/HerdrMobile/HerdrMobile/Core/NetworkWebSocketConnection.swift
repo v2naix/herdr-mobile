@@ -12,7 +12,8 @@ import Network
 @available(iOS 26.0, macOS 26.0, *)
 @_spi(Testing) @MainActor
 public final class NetworkWebSocketConnection: NativeConnectionServing {
-    @_spi(Testing) public static let maximumMessageSize = 8 * 1024
+    @_spi(Testing) public static let maximumOutgoingMessageSize = 8 * 1024
+    @_spi(Testing) public static let maximumIncomingMessageSize = 1024 * 1024
 
     private var connection: NetworkConnection<WebSocket>?
     private var receiveTask: Task<Void, Never>?
@@ -38,7 +39,7 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
             url: url,
             authorizationHeader: "Bearer \(sessionToken)",
             autoReplyPing: true,
-            maximumMessageSize: maximumMessageSize
+            maximumMessageSize: maximumIncomingMessageSize
         )
     }
 
@@ -100,7 +101,7 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
                             throw NativeConnectionError.invalidMessage
                         }
                         let data = message.content
-                        guard data.count <= Self.maximumMessageSize else {
+                        guard data.count <= Self.maximumIncomingMessageSize else {
                             throw NativeConnectionError.messageTooLarge
                         }
                         guard let decoded = try? JSONDecoder().decode(
@@ -128,7 +129,7 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
     public func send(_ message: NativeClientMessage) async throws {
         guard let connection else { throw NativeConnectionError.transport }
         let data = try JSONEncoder().encode(message)
-        guard data.count <= Self.maximumMessageSize,
+        guard data.count <= Self.maximumOutgoingMessageSize,
               let text = String(data: data, encoding: .utf8)
         else {
             throw NativeConnectionError.messageTooLarge
