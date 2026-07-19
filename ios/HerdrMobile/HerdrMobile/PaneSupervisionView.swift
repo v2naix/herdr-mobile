@@ -193,7 +193,7 @@ struct PaneSupervisionView: View {
             }
 
             HStack(spacing: 7) {
-                commandKey("Ctrl+C", command: .controlC, tint: .red)
+                commandKey("ctrl c", command: .controlC, tint: .red)
                 commandKey("↑", command: .up, tint: .gray)
                 commandKey("↓", command: .down, tint: .gray)
                 commandKey("y", command: .yes, tint: .green)
@@ -203,7 +203,7 @@ struct PaneSupervisionView: View {
                 Button("回复") { model.presentReplyEditor() }
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
-                    .frame(minWidth: 68, minHeight: 44)
+                    .frame(minWidth: 56, minHeight: 44)
                     .disabled(!canSendCommand)
                     .accessibilityIdentifier("reply")
             }
@@ -228,11 +228,13 @@ struct PaneSupervisionView: View {
                     commandButton("Ctrl+P", command: .controlP)
                     commandButton("Ctrl+O", command: .controlO)
                 } label: {
-                    Label("更多", systemImage: "keyboard")
+                    Text("•••")
+                        .font(.headline)
+                        .frame(width: 28)
                 }
                 .buttonStyle(.bordered)
                 .tint(.gray)
-                .frame(minHeight: 44)
+                .frame(minWidth: 44, minHeight: 44)
                 .disabled(!canSendCommand)
                 .accessibilityIdentifier("more-commands")
                 commandKey("/", command: .slash, tint: .gray)
@@ -284,7 +286,16 @@ struct PaneSupervisionView: View {
         commandButton(title, command: command)
             .buttonStyle(.bordered)
             .tint(tint)
-            .frame(minWidth: title == "Enter" ? 64 : nil, minHeight: 44)
+            .frame(minWidth: minimumCommandWidth(for: title), minHeight: 44)
+    }
+
+    private func minimumCommandWidth(for title: String) -> CGFloat? {
+        switch title {
+        case "ctrl c": 48
+        case "Tab": 38
+        case "Enter": 60
+        default: nil
+        }
     }
 
     private func commandButton(
@@ -295,6 +306,7 @@ struct PaneSupervisionView: View {
         Button(title, role: role) {
             Task { await model.sendQuickCommand(command) }
         }
+        .lineLimit(1)
         .frame(minHeight: 44)
         .disabled(!canSendCommand)
     }
