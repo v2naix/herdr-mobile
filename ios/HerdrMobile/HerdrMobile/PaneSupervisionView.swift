@@ -193,21 +193,22 @@ struct PaneSupervisionView: View {
             }
 
             HStack(spacing: 7) {
-                commandKey("ctrl c", command: .controlC, tint: .red)
+                commandKey("^C", command: .controlC, tint: .red)
                 commandKey("↑", command: .up, tint: .gray)
                 commandKey("↓", command: .down, tint: .gray)
                 commandKey("y", command: .yes, tint: .green)
                 commandKey("n", command: .no, tint: .red)
-                commandKey("Tab", command: .tab, tint: .gray)
+                commandKey("⇥", command: .tab, tint: .gray)
                 Spacer(minLength: 0)
                 Button { model.presentReplyEditor() } label: {
                     Text("回复")
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                        .frame(minWidth: 68, minHeight: 44)
+                        .frame(minWidth: 76)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
+                .frame(minHeight: 44)
                 .layoutPriority(1)
                 .disabled(!canSendCommand)
                 .accessibilityIdentifier("reply")
@@ -302,8 +303,8 @@ struct PaneSupervisionView: View {
 
     private func minimumCommandWidth(for title: String) -> CGFloat? {
         switch title {
-        case "ctrl c": 48
-        case "Tab": 38
+        case "^C": 42
+        case "⇥": 42
         default: nil
         }
     }
@@ -318,10 +319,11 @@ struct PaneSupervisionView: View {
             Task { await model.sendQuickCommand(command) }
         } label: {
             Image(systemName: systemImage)
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: 52)
         }
         .buttonStyle(.bordered)
         .tint(tint)
+        .frame(minHeight: 44)
         .disabled(!canSendCommand)
         .accessibilityLabel(accessibilityLabel)
     }
