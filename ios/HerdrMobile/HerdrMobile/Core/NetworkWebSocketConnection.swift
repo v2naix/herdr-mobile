@@ -64,15 +64,18 @@ public final class NetworkWebSocketConnection: NativeConnectionServing {
             .autoReplyPing(handshake.autoReplyPing)
             .maximumMessageSize(handshake.maximumMessageSize)
         }
+        let generation = streamGeneration
         connection.onViabilityUpdate { [weak self] _, isViable in
+            guard self?.streamGeneration == generation else { return }
             self?.pathEventHandler?(.viabilityChanged(isViable))
         }
         connection.onBetterPathUpdate { [weak self] _, hasBetterPath in
-            guard hasBetterPath else { return }
+            guard hasBetterPath,
+                  self?.streamGeneration == generation
+            else { return }
             self?.pathEventHandler?(.betterPathAvailable)
         }
         self.connection = connection
-        let generation = streamGeneration
 
         return AsyncThrowingStream { continuation in
             streamContinuation = continuation

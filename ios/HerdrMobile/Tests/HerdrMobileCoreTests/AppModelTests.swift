@@ -29,6 +29,7 @@ struct AppModelTests {
         try await transientFailuresUseCappedForegroundBackoff()
         try await authenticationRejectionGetsOnlyOneSilentRecovery()
         try await betterNetworkPathReplacesConnectionWithoutResendingCommand()
+        try await replacementConnectionDoesNotChaseItsOwnBetterPath()
         try await nonRetryableAndBackendFailuresAreActionable()
         try await diagnosticsExcludeCredentialsAndTerminalContent()
         try await transientAppStateNeverCrossesPersistenceSeams()
@@ -58,7 +59,7 @@ struct AppModelTests {
         try await explicitRetryAfterUnknownSendUsesNewCommandID()
         try await commandTimeoutMarksOutcomeUnknownWithoutClearingDraft()
         try nativeProtocolUsesStrictTypedJSON()
-        print("HerdrMobileCoreTests: 42 passed")
+        print("HerdrMobileCoreTests: 43 passed")
     }
 
     static func successfulSetupNormalizesAndPersistsAfterValidation() async throws {
@@ -307,6 +308,28 @@ struct AppModelTests {
         try check(model.state.command?.status == .outcomeUnknown, "path replacement should preserve an in-flight command as unknown")
         try check(live.sent.count == sentBeforePathChange, "path replacement must never resend a command")
         try check(live.openCount == 2, "a better path should establish one fresh connection")
+    }
+
+    static func replacementConnectionDoesNotChaseItsOwnBetterPath() async throws {
+        let live = FakeLiveConnection()
+        let model = configuredModel(live: live)
+        await model.start()
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: []))
+        await settle()
+
+        live.emitPath(.betterPathAvailable)
+        await settle()
+        try check(live.openCount == 2, "a better path should replace the original connection once")
+
+        live.emit(.hello(protocolVersion: 1, serverEpoch: "epoch-1"))
+        live.emit(.paneSnapshot(serverEpoch: "epoch-1", revision: 1, panes: []))
+        await settle()
+        live.emitPath(.betterPathAvailable)
+        await settle()
+
+        try check(live.openCount == 2, "the replacement connection must not chase the same better path forever")
+        try check(model.state.connection == .online, "ignoring the replacement echo should keep synchronized state online")
     }
 
     static func nonRetryableAndBackendFailuresAreActionable() async throws {

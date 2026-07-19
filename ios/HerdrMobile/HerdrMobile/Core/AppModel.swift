@@ -283,6 +283,7 @@ public final class AppModel: ObservableObject {
     private var commandTimeoutTask: Task<Void, Never>?
     private var commandNoticeTask: Task<Void, Never>?
     private var isForeground = true
+    private var ignoreNextBetterPathEcho = false
 
     @_spi(Testing) public init(
         sessions: NativeSessionServing,
@@ -441,6 +442,7 @@ public final class AppModel: ObservableObject {
         guard isForeground, state.screen == .configured else { return }
         switch event {
         case .viabilityChanged(false):
+            ignoreNextBetterPathEcho = false
             connectionGeneration += 1
             connectionTask?.cancel()
             connectionTask = nil
@@ -454,7 +456,14 @@ public final class AppModel: ObservableObject {
         case .viabilityChanged(true):
             if state.connection == .offline { retryNow() }
         case .betterPathAvailable:
-            guard let session = nativeSession else { return }
+            guard state.connection == .online,
+                  let session = nativeSession
+            else { return }
+            if ignoreNextBetterPathEcho {
+                ignoreNextBetterPathEcho = false
+                return
+            }
+            ignoreNextBetterPathEcho = true
             replaceLiveConnection(sessionToken: session.token)
         }
     }
@@ -827,6 +836,7 @@ public final class AppModel: ObservableObject {
 
     private func handleConnectionEnd(error: Error?) {
         guard isForeground, state.connection != .incompatibleProtocol else { return }
+        ignoreNextBetterPathEcho = false
         markPendingCommandOutcomeUnknown()
         state.selectedPaneIsStale = state.selectedPane != nil
 
