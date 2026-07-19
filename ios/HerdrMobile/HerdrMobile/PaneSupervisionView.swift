@@ -295,18 +295,18 @@ struct PaneSupervisionView: View {
     }
 
     private func commandKey(_ title: String, command: QuickCommand, tint: Color) -> some View {
-        commandButton(title, command: command)
-            .buttonStyle(.bordered)
-            .tint(tint)
-            .frame(minWidth: minimumCommandWidth(for: title), minHeight: 44)
-    }
-
-    private func minimumCommandWidth(for title: String) -> CGFloat? {
-        switch title {
-        case "⌃C": 42
-        case "⇥": 42
-        default: nil
+        Button {
+            Task { await model.sendQuickCommand(command) }
+        } label: {
+            Text(title)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
+        .buttonStyle(.bordered)
+        .tint(tint)
+        .frame(minHeight: 44)
+        .layoutPriority(title == "⌃C" ? 1 : 0)
+        .disabled(!canSendCommand)
     }
 
     private func commandIconKey(
