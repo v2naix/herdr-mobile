@@ -255,6 +255,7 @@ struct PaneSupervisionView: View {
         }
         .padding(.top, 10)
         .padding(.bottom, 8)
+        .buttonBorderShape(.roundedRectangle(radius: 8))
         .background(.bar)
     }
 
