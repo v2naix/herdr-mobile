@@ -203,10 +203,11 @@ struct PaneSupervisionView: View {
                 Button("回复") { model.presentReplyEditor() }
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.16, green: 0.41, blue: 0.74))
+                    .frame(minWidth: 68, minHeight: 44)
                     .disabled(!canSendCommand)
                     .accessibilityIdentifier("reply")
             }
-            .controlSize(.small)
+            .controlSize(.regular)
             .padding(.horizontal, 12)
 
             HStack(spacing: 7) {
@@ -231,12 +232,13 @@ struct PaneSupervisionView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.gray)
+                .frame(minHeight: 44)
                 .disabled(!canSendCommand)
                 .accessibilityIdentifier("more-commands")
                 commandKey("/", command: .slash, tint: .gray)
                 commandKey("Enter", command: .enter, tint: .blue)
             }
-            .controlSize(.small)
+            .controlSize(.regular)
             .padding(.horizontal, 12)
         }
         .padding(.top, 10)
@@ -282,6 +284,7 @@ struct PaneSupervisionView: View {
         commandButton(title, command: command)
             .buttonStyle(.bordered)
             .tint(tint)
+            .frame(minWidth: title == "Enter" ? 64 : nil, minHeight: 44)
     }
 
     private func commandButton(
@@ -292,6 +295,7 @@ struct PaneSupervisionView: View {
         Button(title, role: role) {
             Task { await model.sendQuickCommand(command) }
         }
+        .frame(minHeight: 44)
         .disabled(!canSendCommand)
     }
 
